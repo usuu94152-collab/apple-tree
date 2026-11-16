@@ -1,33 +1,105 @@
 let ctx: AudioContext | undefined;
-let enabled = localStorage.getItem("swoosh-sound") !== "off";
+let noise: AudioBuffer | undefined;
+let enabled = (() => {
+  try {
+    return localStorage.getItem("swoosh-sound") !== "off";
+  } catch {
+    return true;
+  }
+})();
 export function setSound(on: boolean) {
   enabled = on;
-  localStorage.setItem("swoosh-sound", on ? "on" : "off");
+  try {
+    localStorage.setItem("swoosh-sound", on ? "on" : "off");
+  } catch {
+    /* Preference stays for this page only. */
+  }
   if (on) play("pop");
 }
 export const soundEnabled = () => enabled;
+
+function tone(
+  a: AudioContext,
+  type: OscillatorType,
+  from: number,
+  to: number,
+  start: number,
+  length: number,
+  volume: number,
+) {
+  const o = a.createOscillator(),
+    g = a.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(from, start);
+  o.frequency.exponentialRampToValueAtTime(to, start + length);
+  g.gain.setValueAtTime(0.0001, start);
+  g.gain.exponentialRampToValueAtTime(volume, start + 0.02);
+  g.gain.setValueAtTime(volume, start + length * 0.7);
+  g.gain.exponentialRampToValueAtTime(0.0001, start + length);
+  o.connect(g).connect(a.destination);
+  o.start(start);
+  o.stop(start + length + 0.02);
+}
+
+function hiss(a: AudioContext, start: number, length: number, volume: number) {
+  if (!noise) {
+    noise = a.createBuffer(1, a.sampleRate * 0.5, a.sampleRate);
+    const d = noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const s = a.createBufferSource(),
+    f = a.createBiquadFilter(),
+    g = a.createGain();
+  s.buffer = noise;
+  f.type = "bandpass";
+  f.frequency.value = 900;
+  f.Q.value = 0.8;
+  g.gain.setValueAtTime(volume, start);
+  g.gain.exponentialRampToValueAtTime(0.0001, start + length);
+  s.connect(f).connect(g).connect(a.destination);
+  s.start(start);
+  s.stop(start + length);
+}
+
+/** Small synthesized effects: no audio files to download. */
 export function play(kind = "pop") {
   if (!enabled) return;
   try {
     ctx ??= new AudioContext();
     void ctx.resume();
-    const now = ctx.currentTime;
-    const o = ctx.createOscillator(),
-      g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(
-      kind === "launch" ? 180 : kind === "star" ? 880 : 520,
-      now,
-    );
-    o.frequency.exponentialRampToValueAtTime(
-      kind === "launch" ? 1200 : 260,
-      now + 0.22,
-    );
-    g.gain.setValueAtTime(0.07, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-    o.connect(g).connect(ctx.destination);
-    o.start();
-    o.stop(now + 0.3);
+    const a = ctx,
+      now = a.currentTime;
+    switch (kind) {
+      case "launch":
+        tone(a, "sine", 180, 1200, now, 0.28, 0.07);
+        break;
+      case "fill":
+        tone(a, "triangle", 660, 990, now, 0.12, 0.08);
+        break;
+      case "land":
+        tone(a, "sine", 320, 120, now, 0.16, 0.12);
+        break;
+      case "boing":
+        tone(a, "triangle", 260, 620, now, 0.18, 0.08);
+        tone(a, "triangle", 620, 300, now + 0.16, 0.16, 0.06);
+        break;
+      case "bell":
+        tone(a, "sine", 1320, 1310, now, 0.35, 0.07);
+        tone(a, "sine", 1320, 1310, now + 0.3, 0.45, 0.07);
+        break;
+      case "horn":
+        for (const t of [0, 0.42]) {
+          tone(a, "sawtooth", 392, 388, now + t, 0.34, 0.035);
+          tone(a, "sawtooth", 494, 490, now + t, 0.34, 0.03);
+        }
+        hiss(a, now, 0.6, 0.05);
+        break;
+      case "chug":
+        hiss(a, now, 0.12, 0.06);
+        break;
+      default:
+        tone(a, "sine", 520, 260, now, 0.22, 0.07);
+    }
   } catch {
     /* Muted/unsupported audio never interrupts play. */
   }

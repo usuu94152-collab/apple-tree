@@ -1,8 +1,15 @@
 import { forwardRef, useImperativeHandle, useRef, useEffect } from "react";
-import { ObjectType } from "../../../shared/protocol";
-import { objects, svg, svgUrl, loadImage } from "../objects/catalog";
+import {
+  Design,
+  Region,
+  figureSvg,
+  hitRegion,
+  loadImage,
+  svgUrl,
+} from "../objects/figure";
 type Point = { x: number; y: number };
 type Stroke = { points: Point[]; color: string; width: number; erase: boolean };
+export type Tool = "fill" | "pen" | "erase";
 export interface DrawingHandle {
   undo: () => void;
   clear: () => void;
@@ -10,16 +17,18 @@ export interface DrawingHandle {
   save: () => void;
 }
 interface Props {
-  type: ObjectType;
+  design: Design;
+  tool: Tool;
   color: string;
   width: number;
-  erase: boolean;
   ready: boolean;
   /** True while the flung paper is travelling to the big screen. */
   flying: boolean;
   canCancel: boolean;
   onSwipe: () => void;
   onCancel: () => void;
+  onFill: (region: Region) => void;
+  onStroke: () => void;
   roomId: string;
 }
 export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
@@ -29,9 +38,14 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
       active = useRef<Stroke | null>(null),
       pointer = useRef<number | null>(null),
       paper = useRef<HTMLDivElement>(null),
+      hitMap = useRef<ImageData | null>(null),
       start = useRef({ x: 0, y: 0 }),
       samples = useRef<{ y: number; t: number }[]>([]),
       flown = useRef(false);
+    const key = `swoosh-draft-${p.roomId}-figure`;
+    const fillUrl = svgUrl(figureSvg(p.design, "fill")),
+      outlineUrl = svgUrl(figureSvg(p.design, "outline")),
+      maskUrl = svgUrl(figureSvg(p.design, "mask"));
     const style = (transform: string, transition = "none", opacity = "") => {
       const el = paper.current;
       if (!el) return;
@@ -45,9 +59,7 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
         tilt = Math.max(-8, Math.min(8, dx * 0.04)),
         lift = 1 + Math.min(0.06, Math.max(0, -dy) / 2500);
       return {
-        y,
         tilt,
-        lift,
         css: `translate(${dx * 0.35}px, ${y}px) rotate(${tilt}deg) scale(${lift})`,
       };
     };
@@ -62,7 +74,24 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
         "transform 0.55s cubic-bezier(.34,1.56,.64,1), opacity 0.3s ease-out",
       );
     }, [p.flying]);
-    const key = `swoosh-draft-${p.roomId}-${p.type}`;
+    // Tap map: every region painted in its own colour, read back to know what was tapped.
+    const shapeKey = p.design.hat + "/" + p.design.item;
+    useEffect(() => {
+      let live = true;
+      hitMap.current = null;
+      void loadImage(svgUrl(figureSvg(p.design, "hit"))).then((img) => {
+        if (!live) return;
+        const c = document.createElement("canvas");
+        c.width = c.height = 512;
+        const x = c.getContext("2d", { willReadFrequently: true })!;
+        x.drawImage(img, 0, 0, 512, 512);
+        hitMap.current = x.getImageData(0, 0, 512, 512);
+      });
+      return () => {
+        live = false;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shapeKey]);
     const save = () => {
       try {
         localStorage.setItem(key, JSON.stringify(strokes.current));
@@ -121,12 +150,16 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
         const out = document.createElement("canvas");
         out.width = out.height = 512;
         const c = out.getContext("2d")!;
-        c.drawImage(await loadImage(svgUrl(svg(p.type))), 0, 0);
-        c.drawImage(canvas.current!, 0, 0);
-        c.globalCompositeOperation = "destination-in"; // Stroke mask also retains balloon string.
-        c.drawImage(await loadImage(svgUrl(svg(p.type, "white", true))), 0, 0);
-        c.globalCompositeOperation = "source-over";
-        c.drawImage(await loadImage(svgUrl(svg(p.type, "none"))), 0, 0);
+        c.drawImage(await loadImage(fillUrl), 0, 0, 512, 512);
+        // Pen strokes only inside the figure, like on screen.
+        const pen = document.createElement("canvas");
+        pen.width = pen.height = 512;
+        const pc = pen.getContext("2d")!;
+        pc.drawImage(canvas.current!, 0, 0);
+        pc.globalCompositeOperation = "destination-in";
+        pc.drawImage(await loadImage(maskUrl), 0, 0, 512, 512);
+        c.drawImage(pen, 0, 0);
+        c.drawImage(await loadImage(outlineUrl), 0, 0, 512, 512);
         return out.toDataURL("image/png");
       },
     }));
@@ -173,14 +206,19 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
         } else style("", "transform 0.4s cubic-bezier(.34,1.56,.64,1)");
         return;
       }
-      active.current = null;
-      save();
+      if (active.current) {
+        active.current = null;
+        save();
+        p.onStroke();
+      }
     };
     return (
       <div className="paper-wrap">
         <div
           ref={paper}
-          className={"paper " + (p.ready ? "ready" : "")}
+          className={
+            "paper " + (p.ready ? "ready" : p.tool === "fill" ? "fill" : "pen")
+          }
           onPointerDown={(e) => {
             if (pointer.current !== null || flown.current) return;
             pointer.current = e.pointerId;
@@ -192,11 +230,28 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
               paper.current?.classList.add("dragging");
               return;
             }
+            const at = point(e);
+            if (p.tool === "fill") {
+              const map = hitMap.current,
+                x = Math.round(at.x),
+                y = Math.round(at.y);
+              if (map && x >= 0 && y >= 0 && x < 512 && y < 512) {
+                const i = (y * 512 + x) * 4;
+                const region = hitRegion(
+                  p.design,
+                  map.data[i],
+                  map.data[i + 1],
+                  map.data[i + 2],
+                );
+                if (region && map.data[i + 3] === 255) p.onFill(region);
+              }
+              return;
+            }
             const s = {
-              points: [point(e)],
+              points: [at],
               color: p.color,
               width: p.width,
-              erase: p.erase,
+              erase: p.tool === "erase",
             };
             strokes.current.push(s);
             active.current = s;
@@ -230,28 +285,25 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
           onPointerUp={(e) => finish(e)}
           onPointerCancel={(e) => finish(e, true)}
         >
-          <img
-            className="template"
-            draggable={false}
-            src={svgUrl(svg(p.type))}
-            alt=""
-          />
+          <img className="layer" draggable={false} src={fillUrl} alt="" />
           <canvas
+            className="layer"
             ref={canvas}
             width={512}
             height={512}
-            aria-label={`${objects[p.type].name} 그림 그리는 도화지`}
+            style={{
+              maskImage: `url("${maskUrl}")`,
+              WebkitMaskImage: `url("${maskUrl}")`,
+              maskSize: "100% 100%",
+              WebkitMaskSize: "100% 100%",
+            }}
+            aria-label="블록 친구 꾸미는 도화지"
           />
-          <img
-            className="outline"
-            draggable={false}
-            src={svgUrl(svg(p.type, "none"))}
-            alt=""
-          />
+          <img className="layer" draggable={false} src={outlineUrl} alt="" />
         </div>
         {p.ready && p.canCancel && !p.flying && (
           <button className="cancel-ready" onClick={p.onCancel}>
-            ↩ 더 그릴래요
+            ↩ 더 꾸밀래요
           </button>
         )}
         {p.ready && !p.flying && (
@@ -263,11 +315,9 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
         )}
         {p.flying && (
           <div className="flying-note" aria-hidden="true">
-            🚀 큰 화면으로 날아가는 중…
+            🚂 기차역으로 날아가는 중…
           </div>
         )}
-        <span className="paper-spark s1">✧</span>
-        <span className="paper-spark s2">✳</span>
       </div>
     );
   },

@@ -3,7 +3,6 @@ import QRCode from "qrcode";
 import { Artwork } from "../../../shared/protocol";
 import { socket, request } from "../network/socket";
 import { World } from "../game/World";
-import { Scenery } from "../components/Scenery";
 import { setSound, soundEnabled } from "../game/sound";
 export function Display() {
   const [room, setRoom] = useState(""),
@@ -93,10 +92,10 @@ export function Display() {
   }
   return (
     <main className="display-page">
-      <Scenery />
-      {initial && <World initial={initial} />}
+      {initial ? <World initial={initial} /> : <World initial={[]} demo />}
       <a className="display-brand brand" href="/">
-        ✳ 슝슝 <span>그림 놀이터</span>
+        <span className="brand-brick" aria-hidden="true" />
+        슝슝 <span>블록 기차역</span>
       </a>
       <button
         className="parent-toggle"
@@ -134,7 +133,7 @@ export function Display() {
             ▦ 방 코드 {room}
           </button>
           <button onClick={() => void control("reset-room")}>
-            ↶ 배경 초기화
+            ↶ 기차역 비우기
           </button>
           <button onClick={() => void control("close-room")}>
             놀이방 종료
@@ -145,17 +144,18 @@ export function Display() {
         <section
           className={"room-panel " + (count > 0 && !showCode ? "compact" : "")}
         >
-          <div className="eyebrow">함께 만드는 우리 놀이터</div>
+          <div className="eyebrow">🚉 슝슝역 승차권</div>
           {count === 0 || showCode ? (
             <>
               <h1>
-                작은 그림을
-                <br />큰 세상으로, 슝!
+                블록 친구를 꾸며서
+                <br />
+                기차역으로, 슝!
               </h1>
               <p>
                 태블릿으로 QR 코드를 찍거나
                 <br />
-                그림 그리기에서 코드를 입력해요.
+                꾸미기 화면에서 코드를 입력해요.
               </p>
               {qr && <img src={qr} alt="태블릿 연결 QR 코드" />}
               <div className="room-code" aria-label="놀이방 코드">
@@ -165,7 +165,7 @@ export function Display() {
             </>
           ) : (
             <button onClick={() => setShowCode(true)}>
-              ● {count}명과 함께 노는 중 · {room}
+              🎫 {count}명과 함께 노는 중 · {room}
             </button>
           )}
         </section>
@@ -180,8 +180,8 @@ export function Display() {
       )}
       <div className="display-bottom">
         {count > 0
-          ? "친구를 톡! 눌러 보세요 ✨"
-          : "그림을 그려서 보내면 이곳에 친구가 나타나요 ✨"}
+          ? "친구나 기차를 톡! 눌러 보세요 🚂"
+          : "블록 친구를 꾸며서 날려 보내면 기차역에 도착해요 🚂"}
         <button
           onClick={() => {
             setAudio(!sound);

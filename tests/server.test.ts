@@ -34,7 +34,7 @@ const ask = (s: Socket, e: string, p: any = {}) =>
 const artwork = (roomId: string, extra = {}) => ({
   messageId: crypto.randomUUID(),
   roomId,
-  objectType: "apple",
+  objectType: "figure",
   imageData,
   timestamp: Date.now(),
   ...extra,
@@ -137,13 +137,11 @@ test("only display can reset/close, reset clears artwork, close invalidates room
   assert.equal((await ask(d, "close-room")).ok, true);
   assert.equal(app.rooms.has(r.roomId), false);
 });
-test("retains only the newest 30 images and supports all object types", async () => {
+test("retains only the newest 30 figures", async () => {
   const { t, r } = await pair();
   let first = "";
   for (let i = 0; i < 31; i++) {
-    const a = artwork(r.roomId, {
-      objectType: ["apple", "fish", "balloon", "star"][i % 4],
-    });
+    const a = artwork(r.roomId);
     if (i === 0) first = a.messageId;
     const res = await ask(t, "send-artwork", a);
     assert.equal(res.ok, true, res.error);
@@ -152,7 +150,7 @@ test("retains only the newest 30 images and supports all object types", async ()
   const list = app.rooms.get(r.roomId)!.artworks;
   assert.equal(list.length, 30);
   assert.ok(!list.some((a) => a.messageId === first));
-  assert.equal(new Set(list.map((a) => a.objectType)).size, 4);
+  assert.ok(list.every((a) => a.objectType === "figure"));
 });
 test("room guess attempts are rate limited", async () => {
   const s = await client();

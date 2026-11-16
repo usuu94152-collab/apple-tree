@@ -1,109 +1,81 @@
-import { Scenery } from "../components/Scenery";
-import { svg, svgUrl, objects } from "../objects/catalog";
-import { ObjectType } from "../../../shared/protocol";
+import { World } from "../game/World";
+import { figureSvg, sampleDesigns, svgUrl } from "../objects/figure";
+const friends = sampleDesigns
+  .slice(0, 3)
+  .map((d) => svgUrl(figureSvg(d, "full")));
 export function Home() {
   return (
     <main className="home">
       <nav className="home-nav">
         <a className="brand" href="/">
-          ✳ 슝슝 <span>그림 놀이터</span>
+          <span className="brand-brick" aria-hidden="true" />
+          슝슝 <span>블록 기차역</span>
         </a>
-        <span className="nav-note">작은 손끝에서 시작되는 커다란 상상</span>
         <span className="pill">설치 없이, 함께 놀아요</span>
       </nav>
       <section className="hero">
-        <div className="eyebrow">SWOOSH! DRAWING PLAYGROUND</div>
-        <h1>
-          내 그림이 <span>살아 움직이는</span>
-          <br />
-          마법 같은 놀이터<span className="tiny-star">✦</span>
-        </h1>
-        <p>
-          쓱쓱 그리고, 슝! 날려 보세요.
-          <br />
-          우리 아이의 상상이 커다란 세상에서 뛰어놀아요.
-        </p>
-        <div className="home-actions">
-          <a className="action draw-action" href="/draw">
-            <span className="action-icon">✎</span>
-            <div>
-              <strong>
-                그림 그리기 <b>↗</b>
-              </strong>
-              <small>태블릿 · 휴대폰에서 시작해요</small>
-            </div>
-          </a>
-          <a className="action display-action" href="/display">
-            <span className="action-icon">▣</span>
-            <div>
-              <strong>
-                큰 화면 열기 <b>↗</b>
-              </strong>
-              <small>PC · TV에 놀이터를 펼쳐요</small>
-            </div>
-          </a>
+        <div className="hero-text">
+          <div className="eyebrow">CHOO-CHOO! BLOCK STATION</div>
+          <h1>
+            내가 꾸민 <span className="hl">블록 친구</span>가
+            <br />
+            기차를 타요! 🚂
+          </h1>
+          <p>
+            옷을 칠하고 모자를 씌우고, 위로 슝! 날려 보내면
+            <br />큰 화면의 기차역에 내 친구가 도착해요.
+          </p>
+          <div className="home-actions">
+            <a className="action draw-action" href="/draw">
+              <span className="action-icon">🎨</span>
+              <span>
+                <strong>블록 친구 꾸미기</strong>
+                <small>태블릿 · 휴대폰에서 시작해요</small>
+              </span>
+            </a>
+            <a className="action display-action" href="/display">
+              <span className="action-icon">🚉</span>
+              <span>
+                <strong>기차역 열기</strong>
+                <small>PC · TV에 기차역을 펼쳐요</small>
+              </span>
+            </a>
+          </div>
         </div>
-        <div className="hero-tags">
-          <span>✓ 가입 없이 바로</span>
-          <span>✓ 자유롭게 마음껏</span>
-          <span>✓ 함께 만드는 세상</span>
+        <div className="hero-friends" aria-hidden="true">
+          {friends.map((src, i) => (
+            <img key={i} src={src} alt="" className={"hero-friend f" + i} />
+          ))}
         </div>
       </section>
-      <section className="world-preview">
-        <Scenery />
-        <div className="world-caption">
-          여기는 상상이 자라는 곳 <span>✦</span>
-        </div>
-        {(["apple", "fish", "balloon", "star"] as ObjectType[]).map((t) => (
-          <img
-            key={t}
-            className={"preview-object " + t}
-            src={svgUrl(
-              svg(
-                t,
-                {
-                  apple: "#f58a82",
-                  fish: "#f4bd56",
-                  balloon: "#bca5dc",
-                  star: "#ffe397",
-                }[t],
-              ),
-            )}
-            alt={objects[t].name}
-          />
-        ))}
-        <div className="preview-note">
-          내가 그린 친구들이
-          <br />
-          <strong>여기서 만나요!</strong>
-          <span>↗</span>
-        </div>
-        <span className="preview-badge">
-          우리 아이의 첫 번째 인터랙티브 아트
-        </span>
+      <section className="world-preview" aria-label="기차역 미리 보기">
+        <World initial={[]} demo />
       </section>
       <section className="steps">
         <div>
-          <b>01</b>
-          <span>마음에 드는 친구를 골라요</span>
-          <i>🍎 🐟 🎈 ⭐</i>
+          <b>1</b>
+          <i>🪣</i>
+          <span>옷 색깔을 톡톡 칠해요</span>
         </div>
-        <span className="step-arrow">⤳</span>
         <div>
-          <b>02</b>
-          <span>알록달록, 나만의 색으로</span>
-          <i>🖍️</i>
+          <b>2</b>
+          <i>🎩</i>
+          <span>모자 · 표정 · 소품을 골라요</span>
         </div>
-        <span className="step-arrow">⤳</span>
         <div>
-          <b>03</b>
-          <span>슝! 큰 화면에서 만나요</span>
+          <b>3</b>
           <i>🚀</i>
+          <span>위로 휙! 날려 보내요</span>
+        </div>
+        <div>
+          <b>4</b>
+          <i>🚂</i>
+          <span>기차 타고 칙칙폭폭 출발!</span>
         </div>
       </section>
       <footer>
-        슝슝 그림 놀이터 <span>정답 없는 그림, 끝없는 상상.</span>
-        <span>MADE FOR LITTLE ARTISTS ♡</span>
+        슝슝 블록 기차역 · 가입 없이, 광고 없이{" "}
+        <span>MADE FOR LITTLE CONDUCTORS ♡</span>
       </footer>
     </main>
   );

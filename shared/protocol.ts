@@ -1,4 +1,4 @@
-export const objectTypes = ["apple", "fish", "balloon", "star"] as const;
+export const objectTypes = ["figure"] as const;
 export type ObjectType = (typeof objectTypes)[number];
 export interface Artwork {
   messageId: string;
