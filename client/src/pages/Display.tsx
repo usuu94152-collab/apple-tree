@@ -1,9 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Artwork } from "../../../shared/protocol";
 import { socket, request } from "../network/socket";
 import { World } from "../game/World";
 import { setSound, soundEnabled } from "../game/sound";
+import { StageId, stageIds, stageNames } from "../three/stage";
+function savedStage(): StageId {
+  const q = new URLSearchParams(location.search).get("stage");
+  if (stageIds.includes(q as StageId)) return q as StageId;
+  try {
+    const s = localStorage.getItem("swoosh-stage");
+    if (stageIds.includes(s as StageId)) return s as StageId;
+  } catch {
+    /* Default place. */
+  }
+  return "station";
+}
 export function Display() {
   const [room, setRoom] = useState(""),
     [qr, setQR] = useState(""),
@@ -14,7 +26,10 @@ export function Display() {
     [sound, setAudio] = useState(soundEnabled()),
     [closed, setClosed] = useState(false),
     [connected, setConnected] = useState(false),
-    [showCode, setShowCode] = useState(false);
+    [showCode, setShowCode] = useState(false),
+    [stage, setStage] = useState<StageId>(savedStage);
+  // Everything the big screen has received, so switching places keeps the friends.
+  const seen = useRef<Artwork[]>([]);
   useEffect(() => {
     let active = true;
     const connect = async () => {
@@ -37,6 +52,7 @@ export function Display() {
           "display-room",
           JSON.stringify({ roomId: r.roomId, token: r.token }),
         );
+        seen.current = [...(r.artworks || [])];
         setInitial(r.artworks || []);
         setError("");
         setQR(
@@ -58,11 +74,18 @@ export function Display() {
       sessionStorage.removeItem("display-room");
       setError("놀이방이 종료되었어요.");
     };
+    const remember = (a: Artwork) => {
+      if (!seen.current.some((x) => x.messageId === a.messageId))
+        seen.current = [...seen.current, a].slice(-30);
+    };
+    const forget = () => (seen.current = []);
     socket
       .on("connect", connect)
       .on("disconnect", disconnect)
       .on("participants", participants)
-      .on("room-closed", end);
+      .on("room-closed", end)
+      .on("artwork", remember)
+      .on("reset", forget);
     socket.connect();
     return () => {
       active = false;
@@ -70,7 +93,9 @@ export function Display() {
         .off("connect", connect)
         .off("disconnect", disconnect)
         .off("participants", participants)
-        .off("room-closed", end);
+        .off("room-closed", end)
+        .off("artwork", remember)
+        .off("reset", forget);
       socket.disconnect();
     };
   }, []);
@@ -92,7 +117,7 @@ export function Display() {
   }
   return (
     <main className="display-page">
-      {initial && <World initial={initial} />}
+      {initial && <World key={stage} initial={initial} stage={stage} />}
       <a className="display-brand brand" href="/">
         <span className="brand-brick" aria-hidden="true" />
         슝슝 <span>블록 기차역</span>
@@ -110,6 +135,27 @@ export function Display() {
       {menu && (
         <section className="parent-menu">
           <strong>보호자 설정</strong>
+          <div className="stage-pick" role="group" aria-label="장소 고르기">
+            {stageIds.map((id) => (
+              <button
+                key={id}
+                aria-pressed={stage === id}
+                className={stage === id ? "on" : ""}
+                onClick={() => {
+                  if (id === stage) return;
+                  try {
+                    localStorage.setItem("swoosh-stage", id);
+                  } catch {
+                    /* Choice lasts for this visit. */
+                  }
+                  setInitial([...seen.current]);
+                  setStage(id);
+                }}
+              >
+                {stageNames[id]}
+              </button>
+            ))}
+          </div>
           <button
             onClick={() =>
               void document.documentElement

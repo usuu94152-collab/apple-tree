@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { World } from "../game/World";
+import { StageId, stageIds, stageNames } from "../three/stage";
 import { figureSvg, sampleDesigns, svgUrl } from "../objects/figure";
 const friends = sampleDesigns
   .slice(0, 3)
   .map((d) => svgUrl(figureSvg(d, "full")));
 export function Home() {
+  const [stage, setStage] = useState<StageId>("station");
   return (
     <main className="home">
       <nav className="home-nav">
@@ -48,8 +51,20 @@ export function Home() {
           ))}
         </div>
       </section>
-      <section className="world-preview" aria-label="기차역 미리 보기">
-        <World initial={[]} demo />
+      <div className="preview-tabs" role="group" aria-label="미리 볼 장소">
+        {stageIds.map((id) => (
+          <button
+            key={id}
+            aria-pressed={stage === id}
+            className={stage === id ? "on" : ""}
+            onClick={() => setStage(id)}
+          >
+            {stageNames[id]}
+          </button>
+        ))}
+      </div>
+      <section className="world-preview" aria-label="미리 보기">
+        <World key={stage} initial={[]} demo stage={stage} />
       </section>
       <section className="steps">
         <div>

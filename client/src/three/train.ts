@@ -9,6 +9,12 @@ export interface Vehicle {
   wheels: THREE.Mesh[];
   /** Seat anchors (local) for passengers. */
   seats: THREE.Vector3[];
+  /** Where the driver stands (local), if this vehicle is driven. */
+  driverSeat?: THREE.Vector3;
+  /** Passengers stand (subway) instead of sitting (coaches). */
+  stand?: boolean;
+  /** Slide the doors on the platform side: 0 shut … 1 open. */
+  setDoors?: (open: number) => void;
   chimney?: THREE.Vector3;
   rods?: THREE.Mesh[];
 }
@@ -270,7 +276,8 @@ export function buildLoco(): Vehicle {
     length: L,
     wheels,
     rods,
-    seats: [new THREE.Vector3(cx - 0.4, 2.45 - 1.0, 0.6)],
+    seats: [],
+    driverSeat: new THREE.Vector3(cx - 0.4, 2.45 - 1.0, 0.6),
     chimney: new THREE.Vector3(4.3, 8.6, 0),
   };
 }

@@ -151,11 +151,11 @@ test("home, dress-up, fill, accessories, real PNG delivery, refresh and reset", 
   await tablet.close();
 });
 
-test("touch pen strokes, fill undo, erase, start over and offline preservation", async ({
+test("touch pen strokes, fill undo, erase, start over and offline preservation (subway)", async ({
   page,
   browser,
 }) => {
-  await page.goto("/display?lite");
+  await page.goto("/display?lite&stage=subway");
   await expect(page.getByLabel("놀이방 코드")).toHaveText(/\d{6}/, {
     timeout: 90_000,
   });

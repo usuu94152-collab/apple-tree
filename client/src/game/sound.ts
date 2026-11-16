@@ -97,6 +97,31 @@ export function play(kind = "pop") {
       case "chug":
         hiss(a, now, 0.12, 0.06);
         break;
+      case "metro":
+        // Little arrival melody.
+        [659, 784, 988, 784, 1175].forEach((f, i) =>
+          tone(a, "triangle", f, f, now + i * 0.18, 0.22, 0.06),
+        );
+        break;
+      case "chime":
+        tone(a, "sine", 988, 985, now, 0.5, 0.08);
+        tone(a, "sine", 784, 780, now + 0.45, 0.7, 0.08);
+        break;
+      case "doorBeep":
+        for (const t of [0, 0.25, 0.5])
+          tone(a, "square", 1400, 1400, now + t, 0.12, 0.03);
+        break;
+      case "whoosh":
+        hiss(a, now, 0.9, 0.05);
+        tone(a, "sine", 90, 140, now, 0.9, 0.06);
+        break;
+      case "rumble":
+        tone(a, "sine", 60, 55, now, 0.35, 0.05);
+        break;
+      case "metroHorn":
+        tone(a, "triangle", 523, 520, now, 0.35, 0.06);
+        tone(a, "triangle", 659, 655, now, 0.35, 0.05);
+        break;
       default:
         tone(a, "sine", 520, 260, now, 0.22, 0.07);
     }

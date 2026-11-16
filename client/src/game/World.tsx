@@ -21,16 +21,13 @@ import {
 import { play } from "./sound";
 import { puffTexture } from "../three/kit";
 import { Figure, buildFigure } from "../three/minifig";
-import { Vehicle, buildCoach, buildLoco } from "../three/train";
-import {
-  LOOP,
-  PLATFORM,
-  TRACK_Y,
-  buildDiorama,
-  trackAt,
-} from "../three/diorama";
+import { Vehicle } from "../three/train";
+import { Path, Stage, StageId, TrainMode } from "../three/stage";
+import { stationStage } from "../three/stationStage";
+import { subwayStage } from "../three/subway";
 
 type State =
+  | "arriving"
   | "falling"
   | "waiting"
   | "walking"
@@ -54,6 +51,8 @@ interface Friend {
   seed: number;
   from: THREE.Vector3;
   to: THREE.Vector3;
+  path?: Path;
+  leg: number;
 }
 interface Puff {
   sprite: THREE.Sprite;
@@ -63,15 +62,6 @@ interface Puff {
   grow: number;
 }
 
-const GAP = 1.4;
-const SEATS_PER = 4;
-const P = PLATFORM;
-const spot = (i: number) => {
-  const perRow = 13,
-    row = i < perRow ? 0 : 1,
-    j = row ? i - perRow : i;
-  return new THREE.Vector3(-27 + j * 4.5 + row * 2.2, P.y, row ? 25.7 : 22.9);
-};
 const ease = (t: number) =>
   t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 
@@ -108,9 +98,11 @@ function guessDesign(img: HTMLImageElement): Design {
 export function World({
   initial,
   demo = false,
+  stage: stageId = "station",
 }: {
   initial: Artwork[];
   demo?: boolean;
+  stage?: StageId;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -130,47 +122,29 @@ export function World({
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1.0;
+    const stage: Stage = stageId === "subway" ? subwayStage() : stationStage();
+    // Only the train and its riders are cut at the tunnel mouths, so the rest of the scene stays whole.
+    renderer.localClippingEnabled = !!stage.clip;
+    const clipObject = (o: THREE.Object3D) => {
+      if (!stage.clip) return;
+      o.traverse((m) => {
+        const mesh = m as THREE.Mesh;
+        if (!mesh.isMesh || mesh.userData.clipped) return;
+        mesh.userData.clipped = true;
+        const mat = (mesh.material as THREE.Material).clone();
+        mat.clippingPlanes = stage.clip!;
+        mesh.material = mat;
+      });
+    };
     const scene = new THREE.Scene();
-    // Soft sky gradient behind the diorama; fog fades the far table into it.
-    const sky = document.createElement("canvas");
-    sky.width = 2;
-    sky.height = 256;
-    const sg = sky.getContext("2d")!,
-      grad = sg.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, "#9fd0ee");
-    grad.addColorStop(0.6, "#d9ecf5");
-    grad.addColorStop(1, "#f2e6d4");
-    sg.fillStyle = grad;
-    sg.fillRect(0, 0, 2, 256);
-    const skyTex = new THREE.CanvasTexture(sky);
-    skyTex.colorSpace = THREE.SRGBColorSpace;
-    scene.background = skyTex;
-    scene.fog = new THREE.Fog("#efe4d3", 190, 420);
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environmentIntensity = 0.45;
-    // Low, warm afternoon sun: long readable shadows. Little fill light keeps them visible.
-    scene.add(new THREE.HemisphereLight("#d8ecff", "#5f7a4d", 0.32));
-    const sun = new THREE.DirectionalLight("#ffe2b8", 3.6);
-    sun.position.set(-90, 75, 50);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(lite ? 1024 : 4096, lite ? 1024 : 4096);
-    Object.assign(sun.shadow.camera, {
-      left: -95,
-      right: 95,
-      top: 85,
-      bottom: -85,
-      near: 10,
-      far: 320,
-    });
-    sun.shadow.camera.updateProjectionMatrix();
-    sun.shadow.bias = -0.0002;
-    sun.shadow.normalBias = 0.05;
-    sun.shadow.radius = 3;
-    scene.add(sun);
+    const sun = stage.setupLights(scene, lite);
+    const P = { y: stage.platformY };
 
     const camera = new THREE.PerspectiveCamera(28, 1, 1, 700);
-    const target = new THREE.Vector3(0, 0, 4);
+    let target = new THREE.Vector3(0, 0, 4);
     const composer = new EffectComposer(
       renderer,
       new THREE.WebGLRenderTarget(1, 1, {
@@ -184,7 +158,7 @@ export function World({
       new THREE.Vector2(256, 256),
       0.5,
       0.45,
-      0.95,
+      1.6,
     );
     composer.addPass(bloom);
     const hTilt = new ShaderPass(HorizontalTiltShiftShader),
@@ -194,25 +168,30 @@ export function World({
     composer.addPass(new OutputPass());
     let fancy = !lite;
 
-    const diorama = buildDiorama();
-    scene.add(diorama.root);
+    scene.add(stage.root);
+    const { trackAt, loop: LOOP } = stage;
 
-    // Train: engine in front, three coaches behind.
-    const loco = buildLoco();
-    const coaches = [buildCoach(), buildCoach(), buildCoach()];
-    const vehicles: Vehicle[] = [loco, ...coaches];
-    vehicles.forEach((v) => scene.add(v.group));
+    // Train: lead vehicle first, the rest coupled behind it.
+    const { vehicles, gap: GAP } = stage.buildTrain();
+    const lead = vehicles[0];
+    vehicles.forEach((v) => {
+      scene.add(v.group);
+      clipObject(v.group);
+    });
     const offsets = [0];
-    coaches.forEach((co, i) =>
+    for (let i = 1; i < vehicles.length; i++)
       offsets.push(
-        loco.length / 2 + GAP + co.length / 2 + i * (co.length + GAP),
-      ),
-    );
-    const STOP = 30 + offsets[2];
+        offsets[i - 1] +
+          vehicles[i - 1].length / 2 +
+          GAP +
+          vehicles[i].length / 2,
+      );
+    const STOP = stage.stopAt(offsets);
     const train = {
       s: STOP + LOOP * 0.45,
       v: 0,
-      mode: "cruise" as "cruise" | "braking" | "stopped" | "leaving",
+      doors: 0,
+      mode: "cruise" as TrainMode,
       t0: 0,
       lastAction: 0,
       stops: 0,
@@ -220,17 +199,16 @@ export function World({
       chug: 0,
       puffAt: 0,
     };
-    const seats: (Friend | null)[] = Array(coaches.length * SEATS_PER).fill(
-      null,
-    );
-    const seatWorld = (i: number) => {
-      const v = coaches[Math.floor(i / SEATS_PER)];
-      return v.group.localToWorld(v.seats[i % SEATS_PER].clone());
+    const seatRefs = vehicles.flatMap((v) => v.seats.map((_, i) => ({ v, i })));
+    const seats: (Friend | null)[] = Array(seatRefs.length).fill(null);
+    const seatWorld = (k: number) => {
+      const { v, i } = seatRefs[k];
+      return v.group.localToWorld(v.seats[i].clone());
     };
     const placeTrain = () => {
       vehicles.forEach((v, i) => {
         const p = trackAt(train.s - offsets[i]);
-        v.group.position.set(p.x, TRACK_Y, p.z);
+        v.group.position.set(p.x, stage.trackY, p.z);
         v.group.rotation.y = p.yaw;
       });
     };
@@ -240,6 +218,8 @@ export function World({
     const friends: Friend[] = [],
       loading = new Set<string>();
     const waiting = () => friends.filter((f) => f.state === "waiting");
+    const coming = () =>
+      friends.some((f) => f.state === "falling" || f.state === "arriving");
     const ack = (f: Friend) => {
       if (f.acked) return;
       f.acked = true;
@@ -304,6 +284,7 @@ export function World({
         if (known.state !== "falling") ack(known);
         return;
       }
+      if (waiting().length >= stage.maxWaiting + 4) return;
       if (loading.has(a.messageId)) return;
       loading.add(a.messageId);
       const version = resetVersion;
@@ -313,7 +294,7 @@ export function World({
         const design = cleanDesign(a.design) || guessDesign(img);
         const fig = buildFigure(design, img);
         const now = performance.now() / 1000;
-        const s = spot(
+        const s = stage.spot(
           waiting().length +
             friends.filter((f) => f.state === "falling").length,
         );
@@ -333,6 +314,7 @@ export function World({
           seed: Math.random() * 10,
           from: new THREE.Vector3(),
           to: new THREE.Vector3(),
+          leg: 0,
         };
         fig.root.position.set(s.x, 48, s.z);
         scene.add(fig.root);
@@ -341,11 +323,20 @@ export function World({
           f.state = "waiting";
           fig.root.position.copy(s);
           ack(f);
-        } else play("launch");
+        } else if (stage.arrival === "fall") play("launch");
+        else {
+          // Comes in from the street (escalator) instead of the sky.
+          f.state = "arriving";
+          f.path = stage.arrival;
+          f.leg = 0;
+          fig.root.position.copy(stage.arrival.points[0]);
+          ack(f);
+          play("pop");
+        }
         const crowd = friends.filter(
           (x) => x.state !== "leaving" && x.state !== "hopOut",
         );
-        if (crowd.length > MAX_OBJECTS || waiting().length > 26) {
+        if (crowd.length > MAX_OBJECTS || waiting().length > stage.maxWaiting) {
           const oldest = crowd.find((x) => x.state === "waiting");
           if (oldest && oldest !== f) leave(oldest, now);
         }
@@ -372,25 +363,52 @@ export function World({
         scene.attach(f.fig.root);
         seats[f.seat] = null;
         f.from.copy(w);
-        f.to.set(w.x, P.y, P.z0 + 1.6);
+        f.to.copy(stage.alightPoint(w));
         f.state = "hopOut";
-      } else f.state = "leaving";
+      } else startExit(f);
       f.t0 = now;
+    };
+    const startExit = (f: Friend) => {
+      f.state = "leaving";
+      f.path = stage.exitPath(f.fig.root.position);
+      f.leg = 0;
     };
     const board = (f: Friend, seat: number, now: number) => {
       seats[seat] = f;
       f.seat = seat;
       f.state = "walking";
       f.t0 = now;
-      const w = seatWorld(seat);
-      f.to.set(w.x, P.y, P.z0 + 1.2);
+      f.to.copy(stage.boardPoint(seatWorld(seat)));
+    };
+    /** Walk (or ride) along a path; true when the last point is reached. */
+    const follow = (f: Friend, dt: number, now: number) => {
+      const r = f.fig.root,
+        path = f.path!;
+      const goal = path.points[f.leg];
+      if (!goal) return true;
+      const riding = path.ride?.includes(f.leg - 1) ?? false;
+      const d = goal.clone().sub(r.position);
+      const dist = d.length();
+      const step = (riding ? 5 : 7) * dt;
+      if (dist <= step) {
+        r.position.copy(goal);
+        f.leg++;
+        return f.leg >= path.points.length;
+      }
+      r.position.addScaledVector(d.normalize(), step);
+      if (Math.abs(d.x) + Math.abs(d.z) > 0.01) {
+        const yaw = Math.atan2(d.x, d.z);
+        r.rotation.y += (yaw - r.rotation.y) * Math.min(1, dt * 10);
+      }
+      pose(f.fig, riding ? 0 : now * 11);
+      return false;
     };
 
     const updateTrain = (now: number, dt: number) => {
       const brake = 2.4,
         cruise = demo ? 7 : 8;
       const ahead = (((STOP - train.s) % LOOP) + LOOP) % LOOP;
-      const landing = friends.some((f) => f.state === "falling");
+      const landing = coming();
       if (train.mode === "cruise" || train.mode === "leaving") {
         train.v = Math.min(
           cruise,
@@ -405,7 +423,7 @@ export function World({
           ahead <= (train.v * train.v) / (2 * brake) + 0.4
         ) {
           train.mode = "braking";
-          play("horn");
+          play(stage.sounds.approach);
         }
       }
       if (train.mode === "braking") {
@@ -417,8 +435,7 @@ export function World({
           train.t0 = now;
           train.lastAction = now;
           train.stops++;
-          diorama.signal(false);
-          play("bell");
+          play(stage.sounds.stop);
         }
       }
       if (train.mode === "stopped") {
@@ -428,7 +445,11 @@ export function World({
             f.state === "hopIn" ||
             f.state === "hopOut",
         );
-        if (now - train.t0 > 1 && now - train.lastAction > 0.6) {
+        // Doors slide open a moment after stopping.
+        if (now - train.t0 > 0.8)
+          train.doors = Math.min(1, train.doors + dt * 1.3);
+        const ready = !stage.hasDoors || train.doors >= 1;
+        if (ready && now - train.t0 > 1 && now - train.lastAction > 0.6) {
           const next = waiting()[0],
             free = seats.findIndex((s) => !s);
           if (next && free >= 0) {
@@ -460,11 +481,24 @@ export function World({
           now - train.lastAction > 1.4 &&
           now - train.t0 > 2.5
         ) {
-          train.mode = "leaving";
-          diorama.signal(true);
-          play("horn");
+          if (stage.hasDoors) {
+            train.mode = "closing";
+            play("doorBeep");
+          } else {
+            train.mode = "leaving";
+            play(stage.sounds.depart);
+          }
         }
       }
+      if (train.mode === "closing") {
+        train.doors = Math.max(0, train.doors - dt * 1.1);
+        if (train.doors <= 0) {
+          train.mode = "leaving";
+          play(stage.sounds.depart);
+        }
+      }
+      stage.setDoors(train.doors);
+      for (const v of vehicles) v.setDoors?.(train.doors);
       const move = train.v * dt;
       train.s = (train.s + move) % LOOP;
       placeTrain();
@@ -478,21 +512,21 @@ export function World({
           w.rotation.z = (-train.wheel / r) * (w.rotation.y ? -1 : 1);
         }
       const crank = -train.wheel / 1.15;
-      loco.rods?.forEach((rod) => {
+      lead.rods?.forEach((rod) => {
         rod.position.x = Math.cos(crank) * 0.55;
         rod.position.y = 1.15 + Math.sin(crank) * 0.55;
       });
       train.chug += move;
-      if (train.v > 1 && train.chug > 3.4) {
+      if (train.v > 1 && train.chug > stage.sounds.moveEvery) {
         train.chug = 0;
-        play("chug");
+        play(stage.sounds.move);
       }
       const gap = train.v > 0.5 ? Math.max(0.09, 0.5 - train.v * 0.05) : 0.8;
-      if (now - train.puffAt > gap) {
+      if (stage.steam && lead.chimney && now - train.puffAt > gap) {
         train.puffAt = now;
-        const top = loco.group.localToWorld(loco.chimney!.clone());
+        const top = lead.group.localToWorld(lead.chimney.clone());
         const back = new THREE.Vector3(-1, 0, 0)
-          .applyQuaternion(loco.group.quaternion)
+          .applyQuaternion(lead.group.quaternion)
           .multiplyScalar(train.v * 0.6);
         puff(
           top,
@@ -511,6 +545,13 @@ export function World({
       f.fig.armR.rotation.z =
         -0.12 - (jump > 0 ? Math.sin(now * 18) * 0.4 + 0.8 : 0);
       if (f.fig.flag) f.fig.flag.rotation.y = Math.sin(now * 5 + f.seed) * 0.25;
+      if (f.state === "arriving") {
+        if (follow(f, dt, now)) {
+          f.state = "waiting";
+          f.path = undefined;
+        }
+        return;
+      }
       if (f.state === "falling") {
         f.vy -= 70 * dt;
         r.position.y += f.vy * dt;
@@ -547,7 +588,7 @@ export function World({
         return;
       }
       if (f.state === "waiting") {
-        const s = spot(idx);
+        const s = stage.spot(idx);
         const d = s.clone().sub(r.position);
         d.y = 0;
         const dist = d.length();
@@ -584,14 +625,15 @@ export function World({
       if (f.state === "hopIn") {
         const k = Math.min(1, t / 0.75),
           to = seatWorld(f.seat);
+        const { v, i } = seatRefs[f.seat];
         r.position.lerpVectors(f.from, to, ease(k));
-        r.position.y += Math.sin(k * Math.PI) * 5;
-        r.rotation.y = Math.PI * (1 - k) + coaches[0].group.rotation.y * k;
-        pose(f.fig, 0, k > 0.6);
+        r.position.y += Math.sin(k * Math.PI) * stage.hopHeight;
+        r.rotation.y = Math.PI * (1 - k) + v.group.rotation.y * k;
+        pose(f.fig, v.stand ? k * 8 : 0, !v.stand && k > 0.6);
         if (k >= 1) {
-          const v = coaches[Math.floor(f.seat / SEATS_PER)];
+          clipObject(r);
           v.group.add(r);
-          r.position.copy(v.seats[f.seat % SEATS_PER]);
+          r.position.copy(v.seats[i]);
           r.rotation.set(0, 0, 0);
           f.state = "riding";
           f.boardedAt = now;
@@ -600,7 +642,7 @@ export function World({
         return;
       }
       if (f.state === "riding") {
-        pose(f.fig, 0, true);
+        pose(f.fig, 0, !seatRefs[f.seat]?.v.stand);
         f.fig.head.rotation.y = Math.sin(now * 0.9 + f.seed) * 0.3;
         if (train.v > 1)
           f.fig.armL.rotation.x = -1.6 - Math.sin(now * 8 + f.seed) * 0.4;
@@ -609,24 +651,19 @@ export function World({
       if (f.state === "hopOut") {
         const k = Math.min(1, t / 0.7);
         r.position.lerpVectors(f.from, f.to, ease(k));
-        r.position.y += Math.sin(k * Math.PI) * 4;
+        r.position.y += Math.sin(k * Math.PI) * Math.min(4, stage.hopHeight);
         r.rotation.y = (k * -Math.PI) / 2;
-        pose(f.fig, 0, k < 0.4);
+        pose(f.fig, 0, stage.hopHeight > 1 && k < 0.4);
         if (k >= 1) {
-          f.state = "leaving";
+          startExit(f);
           f.t0 = now;
         }
         return;
       }
       if (f.state === "leaving") {
-        // Stroll to the station building and go inside.
-        const goal = new THREE.Vector3(P.x0 + 0.5, P.y, r.position.z);
-        const d = goal.sub(r.position);
-        d.y = 0;
-        r.rotation.y = -Math.PI / 2;
-        pose(f.fig, now * 11);
-        if (d.length() > 0.2) r.position.addScaledVector(d.normalize(), 7 * dt);
-        else {
+        // Walk out the way the stage says, then disappear.
+        if (!follow(f, dt, now)) return;
+        {
           const s = Math.max(0, r.scale.x - dt * 2.5);
           r.scale.setScalar(s);
           if (s === 0) remove(f);
@@ -639,15 +676,12 @@ export function World({
       h = 1;
     const frame = () => {
       const aspect = w / h;
-      const far = Math.pow(Math.max(1, 1.65 / aspect), 0.9);
       camera.aspect = aspect;
-      camera.fov = aspect < 1 ? 40 : 32;
-      // Far enough to see the whole diorama on its table, like walking up to a model railway.
-      camera.position.set(0, 2 + 92 * far, 6 + 118 * far);
+      target = stage.frame(camera, aspect);
       camera.updateProjectionMatrix();
       hTilt.uniforms.h.value = 2.4 / (w * renderer.getPixelRatio());
       vTilt.uniforms.v.value = 2.4 / (h * renderer.getPixelRatio());
-      hTilt.uniforms.r.value = vTilt.uniforms.r.value = 0.45;
+      hTilt.uniforms.r.value = vTilt.uniforms.r.value = stage.focus;
       bloom.resolution.set(w / 2, h / 2);
     };
     const resize = () => {
@@ -668,9 +702,12 @@ export function World({
     const conductor = sampleDesigns[0];
     void loadImage(svgUrl(figureSvg(conductor, "full"))).then((img) => {
       if (disposed) return;
-      driver = buildFigure({ ...conductor, item: "none" }, img);
-      loco.group.add(driver.root);
-      driver.root.position.copy(loco.seats[0]);
+      if (lead.driverSeat) {
+        driver = buildFigure({ ...conductor, item: "none" }, img);
+        lead.group.add(driver.root);
+        clipObject(driver.root);
+        driver.root.position.copy(lead.driverSeat);
+      }
       master = buildFigure(
         {
           ...conductor,
@@ -683,8 +720,8 @@ export function World({
         },
         img,
       );
-      master.root.position.set(P.x1 - 4, P.y, P.z0 + 2.4);
-      master.root.rotation.y = -0.4;
+      master.root.position.copy(stage.master.pos);
+      master.root.rotation.y = stage.master.yaw;
       scene.add(master.root);
     });
 
@@ -721,7 +758,7 @@ export function World({
       updateTrain(now, dt);
       const wait = waiting();
       for (const f of [...friends]) updateFriend(f, now, dt, wait.indexOf(f));
-      diorama.update(now, dt);
+      stage.update(now, dt, { mode: train.mode, doors: train.doors });
       if (master) {
         const stopped = train.mode === "stopped";
         master.armR.rotation.x = stopped
@@ -793,10 +830,12 @@ export function World({
           sparkle(h.point);
           return;
         }
-        play("horn");
-        const top = loco.group.localToWorld(loco.chimney!.clone());
-        for (let i = 0; i < 6; i++)
-          puff(top, new THREE.Vector3((i - 2.5) * 1.2, 7 + i, 0), 1.8, 2);
+        play(stage.sounds.horn);
+        if (stage.steam && lead.chimney) {
+          const top = lead.group.localToWorld(lead.chimney.clone());
+          for (let i = 0; i < 6; i++)
+            puff(top, new THREE.Vector3((i - 2.5) * 1.2, 7 + i, 0), 1.8, 2);
+        }
         return;
       }
     };
@@ -815,12 +854,16 @@ export function World({
       pmrem.dispose();
       renderer.dispose();
     };
-  }, [initial, demo]);
+  }, [initial, demo, stageId]);
   return (
     <canvas
       className="world-canvas"
       ref={canvas}
-      aria-label="블록 친구들이 기차를 타는 기차역"
+      aria-label={
+        stageId === "subway"
+          ? "블록 친구들이 지하철을 타는 지하철역"
+          : "블록 친구들이 기차를 타는 기차역"
+      }
     />
   );
 }

@@ -181,7 +181,7 @@ export function Draw() {
       clearTimeout(timer.current);
       play("bell");
       setSuccess(true);
-      setStatus("짜잔! 기차역에 도착했어요. 기차를 기다려요 🚂");
+      setStatus("짜잔! 역에 도착했어요. 열차를 기다려요 🚆");
       drawing.current!.clear();
       history.current = [];
       setDesign(defaultDesign(), false);
