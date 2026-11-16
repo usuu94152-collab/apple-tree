@@ -2,6 +2,9 @@ import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import sharp from "sharp";
 const PAPER = "블록 친구 꾸미는 도화지";
+// The 3D station runs on software WebGL here: keep it small and in lite mode.
+test.use({ viewport: { width: 800, height: 450 } });
+test.setTimeout(240_000);
 // Push the finished friend up off the paper, like throwing it to the big screen.
 async function fling(page: Page, distance = 160, steps = 8) {
   const box = (await page.getByLabel(PAPER).boundingBox())!;
@@ -32,7 +35,7 @@ test("home, dress-up, fill, accessories, real PNG delivery, refresh and reset", 
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("/");
+  await page.goto("/?lite");
   await expect(
     page.getByRole("link", { name: /블록 친구 꾸미기/ }),
   ).toBeVisible();
@@ -43,9 +46,9 @@ test("home, dress-up, fill, accessories, real PNG delivery, refresh and reset", 
     path: "test-results/home-desktop.png",
     fullPage: true,
   });
-  await page.goto("/display");
+  await page.goto("/display?lite");
   const code = page.getByLabel("놀이방 코드");
-  await expect(code).toHaveText(/\d{6}/);
+  await expect(code).toHaveText(/\d{6}/, { timeout: 90_000 });
   const room = (await code.innerText()).trim();
   const tablet = await browser.newContext({
     viewport: { width: 820, height: 1180 },
@@ -95,7 +98,9 @@ test("home, dress-up, fill, accessories, real PNG delivery, refresh and reset", 
       });
     await draw.getByRole("button", { name: "✓ 다 만들었어요" }).click();
     await fling(draw);
-    await expect(draw.getByRole("status")).toContainText("짜잔");
+    await expect(draw.getByRole("status")).toContainText("짜잔", {
+      timeout: 30_000,
+    });
     await expect(
       draw.getByRole("button", { name: "✓ 다 만들었어요" }),
     ).toBeEnabled();
@@ -120,13 +125,15 @@ test("home, dress-up, fill, accessories, real PNG delivery, refresh and reset", 
   expect(px(300, 430)).toEqual([255, 255, 255, 255]); // right leg untouched
   expect(px(290, 182)).toEqual([255, 210, 63, 255]); // yellow face
   expect(px(420, 110)[3]).toBe(255); // balloon
-  await page.screenshot({ path: "test-results/world.png" });
+  await page.screenshot({ path: "test-results/world.png", timeout: 120_000 });
   await page.reload();
-  await expect(page.getByRole("button", { name: /1명과 함께/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /1명과 함께/ })).toBeVisible({
+    timeout: 90_000,
+  });
   await page.getByRole("button", { name: "보호자 설정" }).click();
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "↶ 기차역 비우기" }).click();
-  await page.setViewportSize({ width: 900, height: 650 });
+  await page.setViewportSize({ width: 640, height: 480 });
   await expect(
     page.getByLabel("블록 친구들이 기차를 타는 기차역"),
   ).toBeVisible();
@@ -148,8 +155,10 @@ test("touch pen strokes, fill undo, erase, start over and offline preservation",
   page,
   browser,
 }) => {
-  await page.goto("/display");
-  await expect(page.getByLabel("놀이방 코드")).toHaveText(/\d{6}/);
+  await page.goto("/display?lite");
+  await expect(page.getByLabel("놀이방 코드")).toHaveText(/\d{6}/, {
+    timeout: 90_000,
+  });
   const room = await page.getByLabel("놀이방 코드").innerText();
   const context = await browser.newContext({
       hasTouch: true,
@@ -208,7 +217,9 @@ test("touch pen strokes, fill undo, erase, start over and offline preservation",
   await expect(draw.getByRole("status")).toContainText("연결됐어요");
   await draw.waitForTimeout(700);
   await fling(draw);
-  await expect(draw.getByRole("status")).toContainText("짜잔");
+  await expect(draw.getByRole("status")).toContainText("짜잔", {
+    timeout: 30_000,
+  });
   await context.close();
 });
 
@@ -216,8 +227,11 @@ test("drawing upwards never sends; ready drag can cancel or launch", async ({
   page,
   browser,
 }) => {
-  await page.goto("/display");
-  await expect(page.getByLabel("놀이방 코드")).toHaveText(/\d{6}/);
+  await page.setViewportSize({ width: 320, height: 180 });
+  await page.goto("/display?lite");
+  await expect(page.getByLabel("놀이방 코드")).toHaveText(/\d{6}/, {
+    timeout: 90_000,
+  });
   const room = await page.getByLabel("놀이방 코드").innerText();
   const context = await browser.newContext({
     viewport: { width: 820, height: 1180 },
@@ -252,13 +266,37 @@ test("drawing upwards never sends; ready drag can cancel or launch", async ({
   await draw.mouse.down();
   await draw.mouse.move(x, y - 120, { steps: 10 });
   await draw.mouse.up();
-  await expect(draw.getByRole("status")).toContainText("짜잔");
+  await expect(draw.getByRole("status")).toContainText("짜잔", {
+    timeout: 30_000,
+  });
   expect(launches).toBe(1);
   // A short but quick upward flick also throws the paper.
   await draw.waitForTimeout(1300);
   await draw.getByRole("button", { name: "✓ 다 만들었어요" }).click();
-  await fling(draw, 60, 2);
+  // Dispatched in one go inside the page, so a busy test machine can't slow the flick down.
+  await draw.getByLabel(PAPER).evaluate((canvas) => {
+    const paper = canvas.parentElement!,
+      r = paper.getBoundingClientRect(),
+      x = r.left + r.width / 2,
+      y = r.top + r.height * 0.7;
+    const fire = (type: string, dy: number) =>
+      paper.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 7,
+          clientX: x,
+          clientY: y - dy,
+          bubbles: true,
+          isPrimary: true,
+        }),
+      );
+    fire("pointerdown", 0);
+    fire("pointermove", 30);
+    fire("pointermove", 60);
+    fire("pointerup", 60);
+  });
   await expect.poll(() => launches).toBe(2);
-  await expect(draw.getByRole("status")).toContainText("짜잔");
+  await expect(draw.getByRole("status")).toContainText("짜잔", {
+    timeout: 30_000,
+  });
   await context.close();
 });

@@ -89,6 +89,36 @@ test("invalid code, unauthorized room, invalid type and malformed image are reje
     false,
   );
 });
+test("dress-up design is kept only when every field is valid", async () => {
+  const { t, d, r } = await pair();
+  const good = {
+    fills: { torso: "#e3342f", legL: "#1f5fbf" },
+    hat: "crown",
+    face: "wink",
+    item: "balloon",
+  };
+  const got = new Promise<any>((resolve) => d.once("artwork", resolve));
+  assert.equal(
+    (await ask(t, "send-artwork", artwork(r.roomId, { design: good }))).ok,
+    true,
+  );
+  assert.deepEqual((await got).design, good);
+  const bad = [
+    { ...good, hat: "rocket" },
+    { ...good, fills: { torso: "red" } },
+    { ...good, fills: { tail: "#ffffff" } },
+    "crown",
+  ];
+  for (const design of bad) {
+    await new Promise((resolve) => setTimeout(resolve, 820));
+    const next = new Promise<any>((resolve) => d.once("artwork", resolve));
+    assert.equal(
+      (await ask(t, "send-artwork", artwork(r.roomId, { design }))).ok,
+      true,
+    );
+    assert.equal((await next).design, undefined);
+  }
+});
 test("strict image size and decode; rapid launches throttled", async () => {
   const { t, r } = await pair();
   assert.equal(

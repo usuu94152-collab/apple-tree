@@ -8,6 +8,7 @@ import {
   Artwork,
   Reply,
   objectTypes,
+  cleanDesign,
   MAX_IMAGE_BYTES,
   MAX_OBJECTS,
 } from "../../shared/protocol.js";
@@ -156,6 +157,7 @@ export function createApp() {
           roomId: p.roomId,
           objectType: p.objectType,
           imageData: p.imageData,
+          design: cleanDesign(p.design),
           timestamp: Date.now(),
         };
         r.artworks.push(a);

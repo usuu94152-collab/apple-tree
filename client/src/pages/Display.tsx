@@ -92,7 +92,7 @@ export function Display() {
   }
   return (
     <main className="display-page">
-      {initial ? <World initial={initial} /> : <World initial={[]} demo />}
+      {initial && <World initial={initial} />}
       <a className="display-brand brand" href="/">
         <span className="brand-brick" aria-hidden="true" />
         슝슝 <span>블록 기차역</span>

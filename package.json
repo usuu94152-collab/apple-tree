@@ -15,12 +15,13 @@
   },
   "dependencies": {
     "express": "^5.1.0",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
+    "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "qrcode": "^1.5.4",
-    "sharp": "^0.34.0"
+    "sharp": "^0.34.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",
@@ -29,6 +30,7 @@
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.170.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.0",
     "esbuild": "^0.25.0",

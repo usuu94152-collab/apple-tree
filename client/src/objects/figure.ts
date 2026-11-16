@@ -1,34 +1,12 @@
 // Block-figure template: every colourable part is a closed path in a 512×512 box.
-export type Region =
-  | "item"
-  | "itemTrim"
-  | "legL"
-  | "legR"
-  | "hips"
-  | "torso"
-  | "armL"
-  | "armR"
-  | "handL"
-  | "handR"
-  | "head"
-  | "hat"
-  | "hatTrim";
-export type HatId =
-  | "conductor"
-  | "helmet"
-  | "crown"
-  | "hair"
-  | "pigtails"
-  | "party"
-  | "none";
-export type FaceId = "smile" | "grin" | "wink" | "wow";
-export type ItemId = "none" | "flag" | "balloon" | "suitcase" | "lollipop";
-export interface Design {
-  fills: Partial<Record<Region, string>>;
-  hat: HatId;
-  face: FaceId;
-  item: ItemId;
-}
+import type {
+  Design,
+  FaceId,
+  HatId,
+  ItemId,
+  Region,
+} from "../../../shared/protocol";
+export type { Design, FaceId, HatId, ItemId, Region };
 
 export const INK = "#23262b";
 export const SKIN = "#ffd23f";

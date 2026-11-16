@@ -149,6 +149,7 @@ export function Draw() {
         roomId: code,
         objectType: "figure",
         imageData: await drawing.current!.compose(),
+        design,
         timestamp: Date.now(),
       };
       const a = pending.current;

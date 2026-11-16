@@ -1,61 +1,108 @@
 import { useEffect, useRef } from "react";
-import { Artwork, MAX_OBJECTS } from "../../../shared/protocol";
+import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { HorizontalTiltShiftShader } from "three/examples/jsm/shaders/HorizontalTiltShiftShader.js";
+import { VerticalTiltShiftShader } from "three/examples/jsm/shaders/VerticalTiltShiftShader.js";
+import { Artwork, MAX_OBJECTS, cleanDesign } from "../../../shared/protocol";
 import { socket } from "../network/socket";
-import { figureSvg, loadImage, sampleDesigns, svgUrl } from "../objects/figure";
-import { play } from "./sound";
 import {
-  Layout,
-  SEATS,
-  chimneyTop,
-  cloud,
-  drawBack,
-  drawFront,
-  drawInWindow,
-  drawSignal,
-  drawSky,
-  drawTrain,
-  layout,
-  seatRect,
-  trainBox,
-  trainLength,
-} from "./station";
+  Design,
+  defaultDesign,
+  figureSvg,
+  loadImage,
+  sampleDesigns,
+  svgUrl,
+} from "../objects/figure";
+import { play } from "./sound";
+import { puffTexture } from "../three/kit";
+import { Figure, buildFigure } from "../three/minifig";
+import { Vehicle, buildCoach, buildLoco } from "../three/train";
+import {
+  LOOP,
+  PLATFORM,
+  TRACK_Y,
+  buildDiorama,
+  trackAt,
+} from "../three/diorama";
 
-type State = "falling" | "waiting" | "boarding" | "riding" | "leaving";
+type State =
+  | "falling"
+  | "waiting"
+  | "walking"
+  | "hopIn"
+  | "riding"
+  | "hopOut"
+  | "leaving";
 interface Friend {
   id: string;
-  img: HTMLImageElement;
+  fig: Figure;
   state: State;
-  /** Centre x and feet y while on the platform. */
-  x: number;
-  y: number;
   vy: number;
   spin: number;
-  angle: number;
-  bounces: number;
-  seat: number;
+  bounced: boolean;
   t0: number;
-  from: { x: number; y: number; s: number };
+  seat: number;
   boardedAt: number;
   stop: number;
   hit: number;
   acked: boolean;
   seed: number;
+  from: THREE.Vector3;
+  to: THREE.Vector3;
 }
 interface Puff {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  r: number;
+  sprite: THREE.Sprite;
   life: number;
   max: number;
-  color: string;
-  star?: boolean;
+  vel: THREE.Vector3;
+  grow: number;
 }
-type Mode = "away" | "arriving" | "stopped" | "departing" | "passing";
 
-const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
-const FEET = 478 / 512;
+const GAP = 1.4;
+const SEATS_PER = 4;
+const P = PLATFORM;
+const spot = (i: number) => {
+  const perRow = 13,
+    row = i < perRow ? 0 : 1,
+    j = row ? i - perRow : i;
+  return new THREE.Vector3(-27 + j * 4.5 + row * 2.2, P.y, row ? 25.7 : 22.9);
+};
+const ease = (t: number) =>
+  t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+/** Rough design from the picture alone (older tablets that don't send one). */
+function guessDesign(img: HTMLImageElement): Design {
+  const c = document.createElement("canvas");
+  c.width = c.height = 512;
+  const x = c.getContext("2d")!;
+  x.drawImage(img, 0, 0);
+  const at = (px: number, py: number) => {
+    const d = x.getImageData(px, py, 1, 1).data;
+    return (
+      "#" +
+      [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, "0")).join("")
+    );
+  };
+  return {
+    ...defaultDesign(),
+    hat: "none",
+    fills: {
+      torso: at(256, 300),
+      armL: at(160, 270),
+      armR: at(352, 270),
+      hips: at(300, 344),
+      legL: at(200, 440),
+      legR: at(312, 440),
+      head: at(290, 182),
+      handL: at(130, 340),
+      handR: at(382, 340),
+    },
+  };
+}
 
 export function World({
   initial,
@@ -66,123 +113,167 @@ export function World({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const c = canvas.current!,
-      ctx = c.getContext("2d")!;
+    const c = canvas.current!;
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let L: Layout = layout(1, 1),
-      dpr = 1,
-      sky = document.createElement("canvas"),
-      back = document.createElement("canvas"),
-      front = document.createElement("canvas"),
-      frame = 0,
-      disposed = false,
-      resetVersion = 0,
-      last = performance.now() / 1000;
-    const friends: Friend[] = [],
-      puffs: Puff[] = [],
-      loading = new Set<string>(),
-      seats: (Friend | null)[] = Array(SEATS).fill(null);
-    const train = {
-      mode: "away" as Mode,
-      x: -9999,
-      startX: 0,
-      t0: 0,
-      angle: 0,
-      nextLap: last + (demo ? 4 : 8),
-      awaySince: last,
-      stops: 0,
-      lastAction: 0,
-      chugAt: 0,
-      puffAt: 0,
-      dist: 0,
-    };
-    let driver: HTMLImageElement | null = null;
-    void loadImage(svgUrl(figureSvg(sampleDesigns[0], "full"))).then(
-      (i) => (driver = i),
+    // ?lite: no post effects and smaller shadows (weak TVs, software rendering).
+    const lite = new URLSearchParams(location.search).has("lite");
+    let disposed = false,
+      resetVersion = 0;
+    const renderer = new THREE.WebGLRenderer({
+      canvas: c,
+      antialias: true,
+      powerPreference: "high-performance",
+    });
+    renderer.setPixelRatio(lite ? 1 : Math.min(devicePixelRatio || 1, 1.5));
+    renderer.shadowMap.enabled = !lite;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    const scene = new THREE.Scene();
+    const bg = new THREE.Color("#dbe7ec");
+    scene.background = bg;
+    scene.fog = new THREE.Fog(bg, 150, 330);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.55;
+    scene.add(new THREE.HemisphereLight("#e6f4ff", "#6d8a5a", 0.55));
+    const sun = new THREE.DirectionalLight("#fff3df", 2.6);
+    sun.position.set(-45, 85, 55);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(lite ? 1024 : 4096, lite ? 1024 : 4096);
+    Object.assign(sun.shadow.camera, {
+      left: -80,
+      right: 80,
+      top: 70,
+      bottom: -70,
+      near: 10,
+      far: 260,
+    });
+    sun.shadow.camera.updateProjectionMatrix();
+    sun.shadow.bias = -0.0003;
+    sun.shadow.normalBias = 0.04;
+    scene.add(sun);
+
+    const camera = new THREE.PerspectiveCamera(28, 1, 1, 700);
+    const target = new THREE.Vector3(0, 2, 9);
+    const composer = new EffectComposer(
+      renderer,
+      new THREE.WebGLRenderTarget(1, 1, {
+        samples: 4,
+        type: THREE.HalfFloatType,
+      }),
     );
+    composer.addPass(new RenderPass(scene, camera));
+    const hTilt = new ShaderPass(HorizontalTiltShiftShader),
+      vTilt = new ShaderPass(VerticalTiltShiftShader);
+    composer.addPass(hTilt);
+    composer.addPass(vTilt);
+    composer.addPass(new OutputPass());
+    let fancy = !lite;
 
-    const paint = (
-      target: HTMLCanvasElement,
-      draw: (x: CanvasRenderingContext2D) => void,
-    ) => {
-      target.width = Math.round(L.w * dpr);
-      target.height = Math.round(L.h * dpr);
-      const x = target.getContext("2d")!;
-      x.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw(x);
-    };
-    const resize = () => {
-      const r = c.getBoundingClientRect();
-      if (!r.width || !r.height) return;
-      dpr = Math.min(devicePixelRatio || 1, 2);
-      c.width = Math.round(r.width * dpr);
-      c.height = Math.round(r.height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      L = layout(r.width, r.height);
-      paint(sky, (x) => drawSky(x, L));
-      paint(back, (x) => drawBack(x, L));
-      paint(front, (x) => drawFront(x, L));
-    };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(c);
-    void document.fonts?.ready.then(() => !disposed && resize());
+    const diorama = buildDiorama();
+    scene.add(diorama.root);
 
-    const stopX = () => {
-      const total = trainLength(L);
-      return total < L.w ? (L.w - total) / 2 : L.w * 0.02;
+    // Train: engine in front, three coaches behind.
+    const loco = buildLoco();
+    const coaches = [buildCoach(), buildCoach(), buildCoach()];
+    const vehicles: Vehicle[] = [loco, ...coaches];
+    vehicles.forEach((v) => scene.add(v.group));
+    const offsets = [0];
+    coaches.forEach((co, i) =>
+      offsets.push(
+        loco.length / 2 + GAP + co.length / 2 + i * (co.length + GAP),
+      ),
+    );
+    const STOP = 30 + offsets[2];
+    const train = {
+      s: STOP + LOOP * 0.45,
+      v: 0,
+      mode: "cruise" as "cruise" | "braking" | "stopped" | "leaving",
+      t0: 0,
+      lastAction: 0,
+      stops: 0,
+      wheel: 0,
+      chug: 0,
+      puffAt: 0,
     };
+    const seats: (Friend | null)[] = Array(coaches.length * SEATS_PER).fill(
+      null,
+    );
+    const seatWorld = (i: number) => {
+      const v = coaches[Math.floor(i / SEATS_PER)];
+      return v.group.localToWorld(v.seats[i % SEATS_PER].clone());
+    };
+    const placeTrain = () => {
+      vehicles.forEach((v, i) => {
+        const p = trackAt(train.s - offsets[i]);
+        v.group.position.set(p.x, TRACK_Y, p.z);
+        v.group.rotation.y = p.yaw;
+      });
+    };
+    placeTrain();
+
+    // Friends.
+    const friends: Friend[] = [],
+      loading = new Set<string>();
     const waiting = () => friends.filter((f) => f.state === "waiting");
-    // Platform spots: one row in front, a second row slightly behind when it fills up.
-    const perRow = () =>
-      Math.max(3, Math.floor((L.w * 0.86 - L.S * 0.6) / (L.S * 0.6)));
-    const spot = (i: number) => {
-      const row = i < perRow() ? 0 : 1,
-        j = row ? i - perRow() : i;
-      return {
-        x: L.w * 0.07 + L.S * 0.3 + j * L.S * 0.6 + row * L.S * 0.3,
-        y: L.feetY - row * L.h * 0.03,
-        row,
-      };
-    };
     const ack = (f: Friend) => {
       if (f.acked) return;
       f.acked = true;
       if (!demo) socket.emit("artwork-ready", { messageId: f.id });
     };
-    const burst = (
-      x: number,
-      y: number,
-      n: number,
-      colors: string[],
-      star = true,
+    let driver: Figure | null = null,
+      master: Figure | null = null;
+    const pose = (f: Figure, walk: number, sit = false) => {
+      const sw = Math.sin(walk) * 0.55;
+      f.legL.rotation.x = sit ? -Math.PI / 2 : sw;
+      f.legR.rotation.x = sit ? -Math.PI / 2 : -sw;
+      f.armL.rotation.x = sit ? -0.3 : -sw * 0.8;
+    };
+
+    // Steam and dust.
+    const puffs: Puff[] = [];
+    const puffMat = (color: string) =>
+      new THREE.SpriteMaterial({
+        map: puffTexture(),
+        color,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.9,
+        fog: true,
+      });
+    const puff = (
+      pos: THREE.Vector3,
+      vel: THREE.Vector3,
+      size: number,
+      life: number,
+      color = "#ffffff",
+      grow = 1.6,
     ) => {
-      for (let j = 0; j < n; j++) {
-        const a = (j / n) * Math.PI * 2;
-        puffs.push({
-          x,
-          y,
-          vx: Math.cos(a) * L.k * 0.18,
-          vy: Math.sin(a) * L.k * 0.18 - L.k * 0.08,
-          r: L.k * 0.012,
-          life: 0.8,
-          max: 0.8,
-          color: colors[j % colors.length],
-          star,
-        });
+      if (reduce || puffs.length > 140) return;
+      const s = new THREE.Sprite(puffMat(color));
+      s.position.copy(pos);
+      s.scale.setScalar(size);
+      scene.add(s);
+      puffs.push({ sprite: s, life, max: life, vel, grow });
+    };
+    const sparkle = (pos: THREE.Vector3) => {
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        puff(
+          pos.clone(),
+          new THREE.Vector3(
+            Math.cos(a) * 6,
+            4 + Math.sin(a) * 3,
+            Math.sin(a) * 3,
+          ),
+          0.7,
+          0.7,
+          ["#ffd23f", "#ff6fa8", "#5bc0eb"][i % 3],
+          0.2,
+        );
       }
     };
-    const leave = (f: Friend, now: number) => {
-      if (f.state === "riding") {
-        const r = seatRect(L, train.x, f.seat);
-        seats[f.seat] = null;
-        f.from = { x: r.x + r.w / 2, y: r.y + r.h, s: L.k * 0.26 };
-        f.x = r.x + r.w / 2;
-      } else f.from = { x: f.x, y: f.y, s: L.S };
-      f.state = "leaving";
-      f.t0 = now;
-    };
-    const live = () => friends.filter((f) => f.state !== "leaving");
 
     const add = async (a: Artwork, restored = false) => {
       const known = friends.find((f) => f.id === a.messageId);
@@ -196,40 +287,43 @@ export function World({
       try {
         const img = await loadImage(a.imageData);
         if (disposed || version !== resetVersion) return;
-        const now = performance.now() / 1000,
-          s = spot(
-            waiting().length +
-              friends.filter((f) => f.state === "falling").length,
-          );
+        const design = cleanDesign(a.design) || guessDesign(img);
+        const fig = buildFigure(design, img);
+        const now = performance.now() / 1000;
+        const s = spot(
+          waiting().length +
+            friends.filter((f) => f.state === "falling").length,
+        );
         const f: Friend = {
           id: a.messageId,
-          img,
-          state: restored ? "waiting" : "falling",
-          x: s.x,
-          y: restored ? s.y : -L.S,
+          fig,
+          state: "falling",
           vy: 0,
-          spin: (Math.random() - 0.5) * 6,
-          angle: 0,
-          bounces: 0,
-          seat: -1,
+          spin: (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 4),
+          bounced: false,
           t0: now,
-          from: { x: 0, y: 0, s: L.S },
+          seat: -1,
           boardedAt: 0,
-          stop: 0,
+          stop: -1,
           hit: 0,
           acked: false,
-          seed: Math.random(),
+          seed: Math.random() * 10,
+          from: new THREE.Vector3(),
+          to: new THREE.Vector3(),
         };
+        fig.root.position.set(s.x, 48, s.z);
+        scene.add(fig.root);
         friends.push(f);
         if (restored || reduce) {
           f.state = "waiting";
-          f.y = s.y;
+          fig.root.position.copy(s);
           ack(f);
         } else play("launch");
-        // Too many friends: the one who has waited longest strolls away.
-        const crowd = live();
-        if (crowd.length > MAX_OBJECTS || waiting().length > perRow() * 2) {
-          const oldest = crowd.find((x) => x.state === "waiting") || crowd[0];
+        const crowd = friends.filter(
+          (x) => x.state !== "leaving" && x.state !== "hopOut",
+        );
+        if (crowd.length > MAX_OBJECTS || waiting().length > 26) {
+          const oldest = crowd.find((x) => x.state === "waiting");
           if (oldest && oldest !== f) leave(oldest, now);
         }
       } catch {
@@ -238,56 +332,80 @@ export function World({
         loading.delete(a.messageId);
       }
     };
+    const remove = (f: Friend) => {
+      f.fig.root.removeFromParent();
+      f.fig.dispose();
+      friends.splice(friends.indexOf(f), 1);
+    };
     const reset = () => {
       resetVersion++;
-      friends.length = 0;
-      puffs.length = 0;
+      for (const f of [...friends]) remove(f);
       seats.fill(null);
     };
-
-    // Train state machine.
-    const startTrain = (mode: Mode, now: number) => {
-      train.mode = mode;
-      train.t0 = now;
-      train.startX = -trainLength(L) - L.w * 0.05;
-      train.x = train.startX;
-      if (mode === "arriving") play("horn");
+    const leave = (f: Friend, now: number) => {
+      if (f.state === "riding") {
+        const w = new THREE.Vector3();
+        f.fig.root.getWorldPosition(w);
+        scene.attach(f.fig.root);
+        seats[f.seat] = null;
+        f.from.copy(w);
+        f.to.set(w.x, P.y, P.z0 + 1.6);
+        f.state = "hopOut";
+      } else f.state = "leaving";
+      f.t0 = now;
     };
     const board = (f: Friend, seat: number, now: number) => {
-      f.state = "boarding";
-      f.seat = seat;
       seats[seat] = f;
-      f.from = { x: f.x, y: f.y, s: L.S };
+      f.seat = seat;
+      f.state = "walking";
       f.t0 = now;
-      play("boing");
+      const w = seatWorld(seat);
+      f.to.set(w.x, P.y, P.z0 + 1.2);
     };
+
     const updateTrain = (now: number, dt: number) => {
-      const before = train.x,
-        total = trainLength(L);
-      if (train.mode === "away") {
-        const landing = friends.some((f) => f.state === "falling");
-        if (waiting().length && !landing && now - train.awaySince > 1.2)
-          startTrain("arriving", now);
-        else if (!waiting().length && now > train.nextLap)
-          startTrain("passing", now);
-      } else if (train.mode === "arriving") {
-        const t = Math.min(1, (now - train.t0) / 4.2);
-        train.x = train.startX + (stopX() - train.startX) * easeOut(t);
-        if (t >= 1) {
+      const brake = 2.4,
+        cruise = demo ? 7 : 8;
+      const ahead = (((STOP - train.s) % LOOP) + LOOP) % LOOP;
+      const landing = friends.some((f) => f.state === "falling");
+      if (train.mode === "cruise" || train.mode === "leaving") {
+        train.v = Math.min(
+          cruise,
+          train.v + (train.mode === "leaving" ? 2.2 : 3) * dt,
+        );
+        if (train.v >= cruise) train.mode = "cruise";
+        const want = waiting().length > 0 || landing;
+        if (
+          train.mode === "cruise" &&
+          want &&
+          ahead > 0.5 &&
+          ahead <= (train.v * train.v) / (2 * brake) + 0.4
+        ) {
+          train.mode = "braking";
+          play("horn");
+        }
+      }
+      if (train.mode === "braking") {
+        train.v = Math.max(0.6, Math.sqrt(2 * brake * ahead));
+        if (ahead < train.v * dt + 0.02 || ahead > LOOP - 1) {
+          train.s = STOP;
+          train.v = 0;
           train.mode = "stopped";
           train.t0 = now;
           train.lastAction = now;
           train.stops++;
+          diorama.signal(false);
           play("bell");
         }
-      } else if (train.mode === "stopped") {
-        train.x = stopX();
-        const hopping = friends.some(
+      }
+      if (train.mode === "stopped") {
+        const busy = friends.some(
           (f) =>
-            f.state === "boarding" ||
-            (f.state === "leaving" && now - f.t0 < 0.7),
+            f.state === "walking" ||
+            f.state === "hopIn" ||
+            f.state === "hopOut",
         );
-        if (now - train.t0 > 0.9 && now - train.lastAction > 0.5) {
+        if (now - train.t0 > 1 && now - train.lastAction > 0.6) {
           const next = waiting()[0],
             free = seats.findIndex((s) => !s);
           if (next && free >= 0) {
@@ -302,7 +420,6 @@ export function World({
               .sort((a, b) => a.boardedAt - b.boardedAt)[0];
             if (old) {
               leave(old, now);
-              play("pop");
               train.lastAction = now;
             }
           }
@@ -315,338 +432,359 @@ export function World({
             ));
         if (
           !canBoard &&
-          !hopping &&
-          now - train.lastAction > 1.2 &&
-          now - train.t0 > 2
+          !busy &&
+          !landing &&
+          now - train.lastAction > 1.4 &&
+          now - train.t0 > 2.5
         ) {
-          train.mode = "departing";
-          train.t0 = now;
+          train.mode = "leaving";
+          diorama.signal(true);
           play("horn");
         }
-      } else if (train.mode === "departing") {
-        const t = now - train.t0,
-          dist = L.w * 1.1 - stopX(),
-          a = (2 * dist) / 25;
-        train.x = stopX() + 0.5 * a * t * t;
-        if (train.x > L.w * 1.05) {
-          train.mode = "away";
-          train.awaySince = now;
-          train.nextLap = now + (demo ? 14 : 28);
-        }
-      } else if (train.mode === "passing") {
-        train.x += ((L.w + total) / 7.5) * dt;
-        if (train.x > L.w * 1.05) {
-          train.mode = "away";
-          train.awaySince = now;
-          train.nextLap = now + (demo ? 14 : 28);
-        }
       }
-      const moved = train.mode === "away" ? 0 : train.x - before;
-      train.angle += moved / (L.k * 0.026);
-      train.dist += Math.abs(moved);
-      const speed = Math.abs(moved) / Math.max(dt, 1e-3);
-      if (train.mode !== "away") {
-        const top = chimneyTop(L, train.x);
-        const gap = speed > 5 ? Math.max(0.12, 0.35 - speed / (L.k * 6)) : 0.9;
-        if (now - train.puffAt > gap && !reduce) {
-          train.puffAt = now;
-          puffs.push({
-            x: top.x,
-            y: top.y,
-            vx: -speed * 0.25 - L.k * 0.02,
-            vy: -L.k * 0.16,
-            r: L.k * 0.03,
-            life: 1.6,
-            max: 1.6,
-            color: "#ffffff",
-          });
+      const move = train.v * dt;
+      train.s = (train.s + move) % LOOP;
+      placeTrain();
+      // Wheels, rods, chuffing and steam.
+      train.wheel += move;
+      for (const v of vehicles)
+        for (const w of v.wheels) {
+          const r =
+            (w.geometry as THREE.CylinderGeometry).parameters?.radiusTop ??
+            0.62;
+          w.rotation.z = (-train.wheel / r) * (w.rotation.y ? -1 : 1);
         }
-        if (speed > 5 && train.dist > L.k * 0.16 && now - train.chugAt > 0.12) {
-          train.dist = 0;
-          train.chugAt = now;
-          play("chug");
-        }
+      const crank = -train.wheel / 1.15;
+      loco.rods?.forEach((rod) => {
+        rod.position.x = Math.cos(crank) * 0.55;
+        rod.position.y = 1.15 + Math.sin(crank) * 0.55;
+      });
+      train.chug += move;
+      if (train.v > 1 && train.chug > 3.4) {
+        train.chug = 0;
+        play("chug");
+      }
+      const gap = train.v > 0.5 ? Math.max(0.09, 0.5 - train.v * 0.05) : 0.8;
+      if (now - train.puffAt > gap) {
+        train.puffAt = now;
+        const top = loco.group.localToWorld(loco.chimney!.clone());
+        const back = new THREE.Vector3(-1, 0, 0)
+          .applyQuaternion(loco.group.quaternion)
+          .multiplyScalar(train.v * 0.6);
+        puff(
+          top,
+          new THREE.Vector3(back.x, 5 + Math.random(), back.z),
+          1.6,
+          2.2,
+        );
       }
     };
 
-    const updateFriend = (f: Friend, now: number, dt: number, i: number) => {
+    const updateFriend = (f: Friend, now: number, dt: number, idx: number) => {
+      const r = f.fig.root,
+        t = now - f.t0;
+      const jump = f.hit ? Math.max(0, 1 - (now - f.hit) / 0.8) : 0;
+      f.fig.body.position.y = Math.sin(jump * Math.PI) * 2.2;
+      f.fig.armR.rotation.z =
+        -0.12 - (jump > 0 ? Math.sin(now * 18) * 0.4 + 0.8 : 0);
+      if (f.fig.flag) f.fig.flag.rotation.y = Math.sin(now * 5 + f.seed) * 0.25;
       if (f.state === "falling") {
-        const target = spot(waiting().length).y;
-        f.vy += L.h * 3.2 * dt;
-        f.y += f.vy * dt;
-        f.angle += f.spin * dt;
-        if (now - f.t0 < 1 && Math.random() < 0.5)
-          puffs.push({
-            x: f.x,
-            y: f.y - L.S * 0.9,
-            vx: 0,
-            vy: -L.k * 0.05,
-            r: L.k * 0.008,
-            life: 0.5,
-            max: 0.5,
-            color: "#fff3a0",
-            star: true,
-          });
-        if (f.y >= target) {
-          f.y = target;
-          if (f.bounces === 0 && f.vy > L.h * 0.4) {
-            f.vy = -f.vy * 0.28;
-            f.bounces++;
+        f.vy -= 70 * dt;
+        r.position.y += f.vy * dt;
+        r.rotation.y += f.spin * dt;
+        r.rotation.z = Math.sin(t * 6) * 0.25;
+        pose(f.fig, t * 9);
+        if (r.position.y <= P.y) {
+          r.position.y = P.y;
+          if (!f.bounced && f.vy < -12) {
+            f.bounced = true;
+            f.vy = -f.vy * 0.25;
             play("land");
-            for (let j = 0; j < 8; j++)
-              puffs.push({
-                x: f.x + (j - 3.5) * L.S * 0.06,
-                y: f.y,
-                vx: (j - 3.5) * L.k * 0.05,
-                vy: -L.k * 0.04,
-                r: L.k * 0.018,
-                life: 0.6,
-                max: 0.6,
-                color: "#e8e2d6",
-              });
+            for (let i = 0; i < 8; i++) {
+              const a = (i / 8) * Math.PI * 2;
+              puff(
+                r.position
+                  .clone()
+                  .add(new THREE.Vector3(Math.cos(a), 0.4, Math.sin(a))),
+                new THREE.Vector3(Math.cos(a) * 3, 0.8, Math.sin(a) * 3),
+                1.2,
+                0.7,
+                "#e9e4da",
+                1.2,
+              );
+            }
           } else {
             f.state = "waiting";
-            f.angle = 0;
+            r.rotation.z = 0;
+            f.vy = 0;
             ack(f);
-            burst(f.x, f.y - L.S * 0.5, 10, ["#ffd23f", "#ff6fa8", "#5bc0eb"]);
+            sparkle(r.position.clone().add(new THREE.Vector3(0, 4, 0)));
           }
         }
         return;
       }
       if (f.state === "waiting") {
-        const s = spot(i);
-        const dx = s.x - f.x;
-        f.x += Math.sign(dx) * Math.min(Math.abs(dx), L.k * 0.35 * dt);
-        f.y += (s.y - f.y) * Math.min(1, dt * 6);
-        f.angle = Math.abs(dx) > 1 ? Math.sin(now * 14) * 0.08 : 0;
+        const s = spot(idx);
+        const d = s.clone().sub(r.position);
+        d.y = 0;
+        const dist = d.length();
+        if (dist > 0.05) {
+          const step = Math.min(dist, 6 * dt);
+          r.position.addScaledVector(d.normalize(), step);
+          r.rotation.y +=
+            (Math.atan2(d.x, d.z) - r.rotation.y) * Math.min(1, dt * 10);
+          pose(f.fig, now * 10);
+        } else {
+          r.rotation.y += (0 - r.rotation.y) * Math.min(1, dt * 4);
+          pose(f.fig, 0);
+          f.fig.head.rotation.y = Math.sin(now * 0.7 + f.seed) * 0.35;
+        }
         return;
       }
-      if (f.state === "boarding") {
-        const t = Math.min(1, (now - f.t0) / 0.75);
-        if (t >= 1) {
+      if (f.state === "walking") {
+        const d = f.to.clone().sub(r.position);
+        d.y = 0;
+        const dist = d.length();
+        if (dist > 0.1) {
+          r.position.addScaledVector(d.normalize(), Math.min(dist, 7 * dt));
+          const yaw = Math.atan2(d.x, d.z);
+          r.rotation.y += (yaw - r.rotation.y) * Math.min(1, dt * 10);
+          pose(f.fig, now * 12);
+        } else {
+          f.state = "hopIn";
+          f.t0 = now;
+          f.from.copy(r.position);
+          play("boing");
+        }
+        return;
+      }
+      if (f.state === "hopIn") {
+        const k = Math.min(1, t / 0.75),
+          to = seatWorld(f.seat);
+        r.position.lerpVectors(f.from, to, ease(k));
+        r.position.y += Math.sin(k * Math.PI) * 5;
+        r.rotation.y = Math.PI * (1 - k) + coaches[0].group.rotation.y * k;
+        pose(f.fig, 0, k > 0.6);
+        if (k >= 1) {
+          const v = coaches[Math.floor(f.seat / SEATS_PER)];
+          v.group.add(r);
+          r.position.copy(v.seats[f.seat % SEATS_PER]);
+          r.rotation.set(0, 0, 0);
           f.state = "riding";
           f.boardedAt = now;
           f.stop = train.stops;
         }
         return;
       }
+      if (f.state === "riding") {
+        pose(f.fig, 0, true);
+        f.fig.head.rotation.y = Math.sin(now * 0.9 + f.seed) * 0.3;
+        if (train.v > 1)
+          f.fig.armL.rotation.x = -1.6 - Math.sin(now * 8 + f.seed) * 0.4;
+        return;
+      }
+      if (f.state === "hopOut") {
+        const k = Math.min(1, t / 0.7);
+        r.position.lerpVectors(f.from, f.to, ease(k));
+        r.position.y += Math.sin(k * Math.PI) * 4;
+        r.rotation.y = (k * -Math.PI) / 2;
+        pose(f.fig, 0, k < 0.4);
+        if (k >= 1) {
+          f.state = "leaving";
+          f.t0 = now;
+        }
+        return;
+      }
       if (f.state === "leaving") {
-        const t = (now - f.t0) / 0.7;
-        if (t >= 1) {
-          f.y = L.feetY;
-          f.x += L.w * 0.16 * dt;
-          f.angle = Math.sin(now * 14) * 0.1;
-          if (f.x > L.w + L.S) friends.splice(friends.indexOf(f), 1);
+        // Stroll to the station building and go inside.
+        const goal = new THREE.Vector3(P.x0 + 0.5, P.y, r.position.z);
+        const d = goal.sub(r.position);
+        d.y = 0;
+        r.rotation.y = -Math.PI / 2;
+        pose(f.fig, now * 11);
+        if (d.length() > 0.2) r.position.addScaledVector(d.normalize(), 7 * dt);
+        else {
+          const s = Math.max(0, r.scale.x - dt * 2.5);
+          r.scale.setScalar(s);
+          if (s === 0) remove(f);
         }
       }
     };
 
-    // Drawing helpers for friends outside the train.
-    const drawFriend = (
-      f: Friend,
-      x: number,
-      feet: number,
-      size: number,
-      angle: number,
-      now: number,
-    ) => {
-      const jump = f.hit ? Math.max(0, 1 - (now - f.hit) / 0.7) : 0,
-        lift = Math.sin(jump * Math.PI) * L.S * 0.35,
-        breathe = reduce ? 0 : Math.sin(now * 2.2 + f.seed * 9) * size * 0.006;
-      if (feet >= L.platTop) {
-        ctx.fillStyle = "rgba(0,0,0,.13)";
-        ctx.beginPath();
-        ctx.ellipse(
-          x,
-          feet,
-          size * 0.24 * (1 - lift / (L.S * 0.6)),
-          size * 0.035,
-          0,
-          0,
-          Math.PI * 2,
-        );
-        ctx.fill();
-      }
-      ctx.save();
-      ctx.translate(x, feet - lift + breathe);
-      ctx.rotate(angle);
-      ctx.drawImage(f.img, -size / 2, -size * FEET, size, size);
-      ctx.restore();
+    // Camera framing that keeps the platform in view on any screen shape.
+    let w = 1,
+      h = 1;
+    const frame = () => {
+      const aspect = w / h;
+      const far = Math.pow(Math.max(1, 1.65 / aspect), 0.9);
+      camera.aspect = aspect;
+      camera.fov = aspect < 1 ? 40 : 34;
+      camera.position.set(0, 2 + 60 * far, 9 + 80 * far);
+      camera.updateProjectionMatrix();
+      hTilt.uniforms.h.value = 2.4 / (w * renderer.getPixelRatio());
+      vTilt.uniforms.v.value = 2.4 / (h * renderer.getPixelRatio());
+      hTilt.uniforms.r.value = vTilt.uniforms.r.value = 0.42;
     };
+    const resize = () => {
+      const r = c.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      w = r.width;
+      h = r.height;
+      renderer.setSize(w, h, false);
+      composer.setSize(w, h);
+      composer.setPixelRatio(renderer.getPixelRatio());
+      frame();
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(c);
+
+    // Fixed cast: the engine driver and a station master with a flag.
+    const conductor = sampleDesigns[0];
+    void loadImage(svgUrl(figureSvg(conductor, "full"))).then((img) => {
+      if (disposed) return;
+      driver = buildFigure({ ...conductor, item: "none" }, img);
+      loco.group.add(driver.root);
+      driver.root.position.copy(loco.seats[0]);
+      master = buildFigure(
+        {
+          ...conductor,
+          fills: {
+            ...conductor.fills,
+            torso: "#1f5fbf",
+            armL: "#1f5fbf",
+            armR: "#1f5fbf",
+          },
+        },
+        img,
+      );
+      master.root.position.set(P.x1 - 4, P.y, P.z0 + 2.4);
+      master.root.rotation.y = -0.4;
+      scene.add(master.root);
+    });
 
     if (demo) {
       let n = 0;
-      const drop = async () => {
+      const drop = () => {
         if (disposed) return;
         const d = sampleDesigns[n++ % sampleDesigns.length];
-        await add({
+        void add({
           messageId: "demo-" + n,
           roomId: "demo",
           objectType: "figure",
           imageData: svgUrl(figureSvg(d, "full")),
+          design: d,
           timestamp: Date.now(),
         });
       };
-      [0.5, 1.3, 2.1].forEach((s) => setTimeout(() => void drop(), s * 1000));
-      const timer = setInterval(() => void drop(), 11000);
-      c.dataset.demo = String(timer);
+      const timers = [0.8, 1.6, 2.4].map((s) => setTimeout(drop, s * 1000));
+      const every = setInterval(drop, 9000);
+      c.dataset.timers = JSON.stringify([...timers.map(Number), Number(every)]);
     } else {
-      for (const a of initial.slice(-perRow() * 2)) void add(a, true);
+      for (const a of initial.slice(-26)) void add(a, true);
       socket.on("artwork", add).on("reset", reset);
     }
 
-    const tick = (ms: number) => {
+    let last = performance.now() / 1000,
+      slow = 0;
+    renderer.setAnimationLoop((ms: number) => {
       const now = ms / 1000,
-        dt = Math.min(now - last, 0.05);
+        real = now - last,
+        dt = Math.min(real, 0.25);
       last = now;
-      if (!L.w || L.w < 2) resize();
       updateTrain(now, dt);
       const wait = waiting();
       for (const f of [...friends]) updateFriend(f, now, dt, wait.indexOf(f));
-      ctx.clearRect(0, 0, L.w, L.h);
-      ctx.drawImage(sky, 0, 0, L.w, L.h);
-      // Drifting clouds, behind mountains and the station.
-      for (let i = 0; i < 3; i++) {
-        const span = L.w + L.p * 14,
-          cx =
-            ((i * 0.37 + (reduce ? 0 : now * 0.006 * (1 + i * 0.3))) % 1) *
-              span -
-            L.p * 8;
-        cloud(ctx, L, cx, L.h * (0.08 + i * 0.07), 1 + (i % 2) * 0.4);
+      diorama.update(now, dt);
+      if (master) {
+        const stopped = train.mode === "stopped";
+        master.armR.rotation.x = stopped
+          ? -2.4 + Math.sin(now * 3) * 0.2
+          : -0.35;
+        if (master.flag) master.flag.rotation.y = Math.sin(now * 5) * 0.25;
       }
-      ctx.drawImage(back, 0, 0, L.w, L.h);
-      drawSignal(ctx, L, train.mode !== "stopped" && train.mode !== "arriving");
-      if (train.mode !== "away")
-        drawTrain(
-          ctx,
-          L,
-          train.x,
-          train.angle,
-          seats.map((s) => (s && s.state === "riding" ? s.img : null)),
-          driver,
-          now,
-          train.mode !== "stopped",
-        );
-      // Steam behind the platform.
       for (let i = puffs.length - 1; i >= 0; i--) {
         const p = puffs[i];
         p.life -= dt;
         if (p.life <= 0) {
+          p.sprite.removeFromParent();
+          p.sprite.material.dispose();
           puffs.splice(i, 1);
           continue;
         }
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        if (!p.star) p.r += L.k * 0.03 * dt;
-        else p.vy += L.k * 0.4 * dt;
-        ctx.globalAlpha =
-          Math.min(1, (p.life / p.max) * 1.4) * (p.star ? 1 : 0.85);
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        if (p.star) {
-          const r = p.r * 1.6;
-          for (let j = 0; j < 8; j++) {
-            const a = (j * Math.PI) / 4,
-              rad = j % 2 ? r * 0.4 : r;
-            ctx.lineTo(p.x + Math.cos(a) * rad, p.y + Math.sin(a) * rad);
-          }
-        } else ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fill();
+        p.sprite.position.addScaledVector(p.vel, dt);
+        p.vel.multiplyScalar(1 - dt * 0.8);
+        p.sprite.scale.multiplyScalar(1 + p.grow * dt);
+        p.sprite.material.opacity = Math.min(0.9, (p.life / p.max) * 1.3);
       }
-      ctx.globalAlpha = 1;
-      ctx.drawImage(front, 0, 0, L.w, L.h);
-      // Friends on the platform: back row first.
-      const order = friends
-        .filter(
-          (f) =>
-            f.state === "waiting" ||
-            f.state === "falling" ||
-            (f.state === "leaving" && now - f.t0 >= 0.7),
-        )
-        .sort((a, b) => a.y - b.y);
-      for (const f of order) {
-        const back = f.state === "waiting" && spot(wait.indexOf(f)).row === 1;
-        drawFriend(f, f.x, f.y, L.S * (back ? 0.94 : 1), f.angle, now);
+      const sway = reduce ? 0 : Math.sin(now * 0.07) * 4;
+      camera.position.x = sway;
+      camera.lookAt(target.x + sway * 0.3, target.y, target.z);
+      // Drop the expensive extras on slow machines.
+      if (fancy && real > 0.07) slow++;
+      else slow = Math.max(0, slow - 1);
+      if (fancy && slow > 40) {
+        fancy = false;
+        renderer.setPixelRatio(1);
+        sun.shadow.mapSize.set(1024, 1024);
+        sun.shadow.map?.dispose();
+        sun.shadow.map = null;
+        resize();
       }
-      // Hops between platform and windows.
-      for (const f of friends) {
-        if (f.state === "boarding") {
-          const t = Math.min(1, (now - f.t0) / 0.75),
-            r = seatRect(L, train.x, f.seat),
-            size = f.from.s + (L.k * 0.26 - f.from.s) * t,
-            fx = f.from.x + (r.x + r.w / 2 - f.from.x) * t,
-            feetTo =
-              r.y + r.h * 0.5 - L.k * 0.26 * (150 / 512) + L.k * 0.26 * FEET,
-            fy =
-              f.from.y +
-              (feetTo - f.from.y) * t -
-              Math.sin(t * Math.PI) * L.h * 0.16;
-          if (t > 0.85) drawInWindow(ctx, L, f.img, r, 0);
-          else drawFriend(f, fx, fy, size, Math.sin(t * Math.PI) * 0.3, now);
-        }
-        if (f.state === "leaving" && now - f.t0 < 0.7) {
-          const t = (now - f.t0) / 0.7,
-            size = f.from.s + (L.S - f.from.s) * t,
-            fy =
-              f.from.y +
-              (L.feetY - f.from.y) * t -
-              Math.sin(t * Math.PI) * L.h * 0.12;
-          drawFriend(f, f.from.x, fy, size, -Math.sin(t * Math.PI) * 0.3, now);
-        }
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
+      if (fancy) composer.render();
+      else renderer.render(scene, camera);
+    });
 
+    const ray = new THREE.Raycaster(),
+      pointer = new THREE.Vector2();
     const hit = (e: PointerEvent) => {
-      const r = c.getBoundingClientRect(),
-        x = e.clientX - r.left,
-        y = e.clientY - r.top,
-        now = performance.now() / 1000;
-      const f = [...friends].reverse().find((f) => {
-        if (f.state === "riding") {
-          const s = seatRect(L, train.x, f.seat);
-          return x > s.x && x < s.x + s.w && y > s.y && y < s.y + s.h;
+      const r = c.getBoundingClientRect();
+      pointer.set(
+        ((e.clientX - r.left) / r.width) * 2 - 1,
+        -((e.clientY - r.top) / r.height) * 2 + 1,
+      );
+      ray.setFromCamera(pointer, camera);
+      const now = performance.now() / 1000;
+      const hits = ray.intersectObjects(
+        [...friends.map((f) => f.fig.root), ...vehicles.map((v) => v.group)],
+        true,
+      );
+      for (const h of hits) {
+        const f = friends.find((f) => {
+          let o: THREE.Object3D | null = h.object;
+          while (o) {
+            if (o === f.fig.root) return true;
+            o = o.parent;
+          }
+          return false;
+        });
+        if (f) {
+          f.hit = now;
+          play("boing");
+          sparkle(h.point);
+          return;
         }
-        return Math.abs(x - f.x) < L.S * 0.3 && y < f.y && y > f.y - L.S * 0.9;
-      });
-      if (f) {
-        f.hit = now;
-        play("boing");
-        burst(x, y, 10, ["#ffd23f", "#ff6fa8", "#5bc0eb", "#8cc63f"]);
-        return;
-      }
-      const b = trainBox(L, train.x);
-      if (
-        train.mode !== "away" &&
-        x > b.x &&
-        x < b.x + b.w &&
-        y > b.y &&
-        y < b.y + b.h
-      ) {
         play("horn");
-        const top = chimneyTop(L, train.x);
-        for (let j = 0; j < 5; j++)
-          puffs.push({
-            x: top.x,
-            y: top.y,
-            vx: (j - 2) * L.k * 0.04,
-            vy: -L.k * (0.2 + j * 0.03),
-            r: L.k * 0.03,
-            life: 1.4,
-            max: 1.4,
-            color: "#ffffff",
-          });
+        const top = loco.group.localToWorld(loco.chimney!.clone());
+        for (let i = 0; i < 6; i++)
+          puff(top, new THREE.Vector3((i - 2.5) * 1.2, 7 + i, 0), 1.8, 2);
+        return;
       }
     };
     c.addEventListener("pointerdown", hit);
     return () => {
       disposed = true;
-      cancelAnimationFrame(frame);
+      renderer.setAnimationLoop(null);
       observer.disconnect();
-      if (demo) clearInterval(Number(c.dataset.demo));
-      else socket.off("artwork", add).off("reset", reset);
       c.removeEventListener("pointerdown", hit);
+      if (demo)
+        for (const t of JSON.parse(c.dataset.timers || "[]"))
+          (clearTimeout(t), clearInterval(t));
+      else socket.off("artwork", add).off("reset", reset);
+      for (const f of [...friends]) remove(f);
+      composer.dispose();
+      pmrem.dispose();
+      renderer.dispose();
     };
   }, [initial, demo]);
   return (

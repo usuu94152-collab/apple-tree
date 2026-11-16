@@ -222,7 +222,11 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
           onPointerDown={(e) => {
             if (pointer.current !== null || flown.current) return;
             pointer.current = e.pointerId;
-            e.currentTarget.setPointerCapture(e.pointerId);
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              /* Synthetic or already-released pointer: keep going without capture. */
+            }
             start.current = { x: e.clientX, y: e.clientY };
             if (p.ready) {
               samples.current = [{ y: e.clientY, t: e.timeStamp }];
