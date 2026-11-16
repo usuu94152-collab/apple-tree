@@ -15,6 +15,9 @@ interface Props {
   width: number;
   erase: boolean;
   ready: boolean;
+  /** True while the flung paper is travelling to the big screen. */
+  flying: boolean;
+  canCancel: boolean;
   onSwipe: () => void;
   onCancel: () => void;
   roomId: string;
@@ -25,7 +28,40 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
       strokes = useRef<Stroke[]>([]),
       active = useRef<Stroke | null>(null),
       pointer = useRef<number | null>(null),
-      start = useRef(0);
+      paper = useRef<HTMLDivElement>(null),
+      start = useRef({ x: 0, y: 0 }),
+      samples = useRef<{ y: number; t: number }[]>([]),
+      flown = useRef(false);
+    const style = (transform: string, transition = "none", opacity = "") => {
+      const el = paper.current;
+      if (!el) return;
+      el.style.transition = transition;
+      el.style.transform = transform;
+      el.style.opacity = opacity;
+    };
+    // Paper follows the finger: free upward, rubber-band downward, slight tilt sideways.
+    const pose = (dx: number, dy: number) => {
+      const y = dy > 0 ? 40 * (1 - Math.exp(-dy / 80)) : dy,
+        tilt = Math.max(-8, Math.min(8, dx * 0.04)),
+        lift = 1 + Math.min(0.06, Math.max(0, -dy) / 2500);
+      return {
+        y,
+        tilt,
+        lift,
+        css: `translate(${dx * 0.35}px, ${y}px) rotate(${tilt}deg) scale(${lift})`,
+      };
+    };
+    // Bring the paper back from below once the flight has finished (sent or failed).
+    useEffect(() => {
+      if (p.flying || !flown.current) return;
+      flown.current = false;
+      style("translateY(90px) scale(0.92)", "none", "0");
+      paper.current?.getBoundingClientRect();
+      style(
+        "",
+        "transform 0.55s cubic-bezier(.34,1.56,.64,1), opacity 0.3s ease-out",
+      );
+    }, [p.flying]);
     const key = `swoosh-draft-${p.roomId}-${p.type}`;
     const save = () => {
       try {
@@ -109,9 +145,32 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
       if (pointer.current !== e.pointerId) return;
       pointer.current = null;
       if (p.ready) {
-        const delta = start.current - e.clientY;
-        (e.currentTarget as HTMLElement).style.transform = "";
-        if (!cancelled && delta > 75) p.onSwipe();
+        paper.current?.classList.remove("dragging");
+        const dx = e.clientX - start.current.x,
+          dy = e.clientY - start.current.y,
+          recent = samples.current.filter((s) => e.timeStamp - s.t < 120),
+          first = recent[0],
+          velocity =
+            first && e.timeStamp > first.t
+              ? (e.clientY - first.y) / (e.timeStamp - first.t)
+              : 0;
+        samples.current = [];
+        // A long push upward, or a quick upward flick, throws the paper.
+        if (!cancelled && (-dy > 90 || (-dy > 30 && velocity < -0.6))) {
+          const { tilt } = pose(dx, dy),
+            rect = paper.current!.getBoundingClientRect(),
+            travel = rect.bottom + 80,
+            ms = Math.round(
+              Math.max(260, Math.min(650, travel / Math.max(1.4, -velocity))),
+            );
+          flown.current = true;
+          style(
+            `translate(${dx * 0.8}px, ${-travel}px) rotate(${tilt * 2 - 10}deg) scale(0.55)`,
+            `transform ${ms}ms cubic-bezier(.2,.65,.35,1), opacity ${ms}ms ease-in`,
+            "0",
+          );
+          p.onSwipe();
+        } else style("", "transform 0.4s cubic-bezier(.34,1.56,.64,1)");
         return;
       }
       active.current = null;
@@ -120,13 +179,19 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
     return (
       <div className="paper-wrap">
         <div
+          ref={paper}
           className={"paper " + (p.ready ? "ready" : "")}
           onPointerDown={(e) => {
-            if (pointer.current !== null) return;
+            if (pointer.current !== null || flown.current) return;
             pointer.current = e.pointerId;
             e.currentTarget.setPointerCapture(e.pointerId);
-            start.current = e.clientY;
-            if (p.ready) return;
+            start.current = { x: e.clientX, y: e.clientY };
+            if (p.ready) {
+              samples.current = [{ y: e.clientY, t: e.timeStamp }];
+              style("", "none");
+              paper.current?.classList.add("dragging");
+              return;
+            }
             const s = {
               points: [point(e)],
               color: p.color,
@@ -140,7 +205,12 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
           onPointerMove={(e) => {
             if (pointer.current !== e.pointerId) return;
             if (p.ready) {
-              e.currentTarget.style.transform = `translateY(${Math.min(35, e.clientY - start.current)}px)`;
+              samples.current.push({ y: e.clientY, t: e.timeStamp });
+              if (samples.current.length > 12) samples.current.shift();
+              style(
+                pose(e.clientX - start.current.x, e.clientY - start.current.y)
+                  .css,
+              );
               return;
             }
             if (!active.current) return;
@@ -179,10 +249,22 @@ export const DrawingCanvas = forwardRef<DrawingHandle, Props>(
             alt=""
           />
         </div>
-        {p.ready && (
+        {p.ready && p.canCancel && !p.flying && (
           <button className="cancel-ready" onClick={p.onCancel}>
             ↩ 더 그릴래요
           </button>
+        )}
+        {p.ready && !p.flying && (
+          <div className="fling-hint" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </div>
+        )}
+        {p.flying && (
+          <div className="flying-note" aria-hidden="true">
+            🚀 큰 화면으로 날아가는 중…
+          </div>
         )}
         <span className="paper-spark s1">✧</span>
         <span className="paper-spark s2">✳</span>

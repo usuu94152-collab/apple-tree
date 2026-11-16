@@ -30,8 +30,7 @@ export function Draw() {
     [ready, setReady] = useState(false),
     [busy, setBusy] = useState(false),
     [muted, setMuted] = useState(!soundEnabled()),
-    [success, setSuccess] = useState(false),
-    [launchImage, setLaunchImage] = useState("");
+    [success, setSuccess] = useState(false);
   const drawing = useRef<DrawingHandle>(null),
     pending = useRef<Artwork | null>(null),
     locked = useRef(false),
@@ -92,7 +91,8 @@ export function Draw() {
     if (locked.current) return;
     locked.current = true;
     setBusy(true);
-    setStatus("그림을 준비하고 있어요…");
+    play("launch");
+    setStatus("슝! 그림이 날아가고 있어요…");
     try {
       drawing.current?.save();
       pending.current ??= {
@@ -124,17 +124,14 @@ export function Draw() {
             timer.current = setTimeout(
               () =>
                 reject(
-                  Error(
-                    "서버가 받았지만 화면 표시는 아직 확인되지 않았어요. 다시 보내기를 눌러 주세요.",
-                  ),
+                  Error("서버가 받았지만 화면 표시는 아직 확인되지 않았어요."),
                 ),
               9000,
             );
           }),
         ]);
       clearTimeout(timer.current);
-      play("launch");
-      setLaunchImage(a.imageData);
+      play("star");
       setSuccess(true);
       setStatus("짜잔! 큰 화면에서 만나요 ✨");
       drawing.current!.clear();
@@ -142,7 +139,10 @@ export function Draw() {
       setReady(false);
       timer.current = setTimeout(() => setSuccess(false), 1000);
     } catch (e) {
-      setStatus((e as Error).message);
+      setStatus(
+        (e as Error).message +
+          (pending.current ? " 준비되면 그림을 다시 위로 밀어 주세요." : ""),
+      );
     } finally {
       waiter.current = null;
       locked.current = false;
@@ -291,20 +291,13 @@ export function Draw() {
                 ♧<small>모두 지우기</small>
               </button>
             </aside>
-            <div className="canvas-area" inert={busy || !!pending.current}>
+            <div className="canvas-area" inert={busy}>
               {success && (
-                <>
-                  <img
-                    className="launch-ghost"
-                    src={launchImage}
-                    alt="날아가는 내 그림"
-                  />
-                  <div className="launch-confetti" aria-hidden="true">
-                    ✦　✧　✦
-                    <br />
-                    　✳　✧
-                  </div>
-                </>
+                <div className="launch-confetti" aria-hidden="true">
+                  ✦　✧　✦
+                  <br />
+                  　✳　✧
+                </div>
               )}
               <DrawingCanvas
                 ref={drawing}
@@ -312,16 +305,18 @@ export function Draw() {
                 color={color}
                 width={width}
                 erase={erase}
-                ready={ready}
+                ready={ready || !!pending.current}
+                flying={busy}
+                canCancel={!pending.current}
                 onSwipe={() => void launch()}
                 onCancel={() => setReady(false)}
                 roomId={code}
               />
             </div>
             <aside className="drawing-note">
-              {ready ? (
+              {ready || pending.current ? (
                 <>
-                  <span>🚀</span>위로 밀면
+                  <span>🚀</span>위로 휙 밀면
                   <br />
                   슝! 날아가요
                 </>
@@ -355,7 +350,7 @@ export function Draw() {
           </div>
           <div className="launch-row">
             <button
-              className="ready-button"
+              className={ready ? "ready-button" : "launch-button"}
               disabled={busy || !!pending.current}
               onClick={() => {
                 setReady(!ready);
@@ -363,18 +358,6 @@ export function Draw() {
               }}
             >
               {ready ? "↩ 더 그리기" : "✓ 다 그렸어요"}
-            </button>
-            <button
-              className="launch-button"
-              disabled={busy}
-              onClick={() => void launch()}
-            >
-              <span>🚀</span>{" "}
-              {busy
-                ? "날아가는 중…"
-                : pending.current
-                  ? "다시 보내기"
-                  : "슝! 날려 보내기"}
             </button>
           </div>
           <p className="draw-status" role="status">

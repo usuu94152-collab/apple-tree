@@ -1264,3 +1264,67 @@ footer > span:last-child {
     opacity: 0;
   }
 }
+
+/* Fling-to-launch: arrows above the lifted paper and a note while it flies. */
+.paper.ready {
+  box-shadow:
+    0 14px 0 #eae2d1,
+    0 26px 40px #ad9e7b2b;
+}
+.paper.ready:active {
+  cursor: grabbing;
+}
+.fling-hint {
+  position: absolute;
+  top: -58px;
+  left: 50%;
+  translate: -50% 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  z-index: 3;
+  transition: opacity 0.15s;
+}
+.paper.dragging ~ .fling-hint {
+  opacity: 0;
+}
+.fling-hint i {
+  width: 22px;
+  height: 22px;
+  margin-bottom: -8px;
+  border-top: 6px solid #e9906f;
+  border-left: 6px solid #e9906f;
+  border-radius: 4px 0 0 0;
+  rotate: 45deg;
+  animation: fling-hint 1.2s ease-in-out infinite;
+}
+.fling-hint i:nth-child(2) {
+  animation-delay: 0.15s;
+  opacity: 0.65;
+}
+.fling-hint i:nth-child(3) {
+  animation-delay: 0.3s;
+  opacity: 0.35;
+}
+@keyframes fling-hint {
+  0%,
+  100% {
+    transform: translate(4px, 4px);
+  }
+  50% {
+    transform: translate(-6px, -6px);
+  }
+}
+.flying-note {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #a39780;
+  font-size: 15px;
+  font-weight: 700;
+  border: 3px dashed #e8dcc4;
+  border-radius: 30px;
+  pointer-events: none;
+}

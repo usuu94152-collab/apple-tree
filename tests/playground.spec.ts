@@ -1,5 +1,16 @@
 import { test, expect } from "@playwright/test";
 import sharp from "sharp";
+import type { Page } from "@playwright/test";
+// Push the finished drawing up off the paper, like throwing it to the big screen.
+async function fling(page: Page, label: string, distance = 160, steps = 8) {
+  const box = (await page.getByLabel(label).boundingBox())!;
+  const x = box.x + box.width / 2,
+    y = box.y + box.height * 0.7;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - distance, { steps });
+  await page.mouse.up();
+}
 test("home, drawing tools, actual PNG delivery of all four objects, refresh and reset", async ({
   browser,
   page,
@@ -63,10 +74,14 @@ test("home, drawing tools, actual PNG delivery of all four objects, refresh and 
         path: "test-results/drawing-tablet.png",
         fullPage: true,
       });
-    await draw.getByRole("button", { name: /슝! 날려 보내기/ }).click();
-    await expect(draw.getByRole("status")).toContainText("짜잔");
     await expect(
       draw.getByRole("button", { name: /슝! 날려 보내기/ }),
+    ).toHaveCount(0);
+    await draw.getByRole("button", { name: "✓ 다 그렸어요" }).click();
+    await fling(draw, name + " 그림 그리는 도화지");
+    await expect(draw.getByRole("status")).toContainText("짜잔");
+    await expect(
+      draw.getByRole("button", { name: "✓ 다 그렸어요" }),
     ).toBeEnabled();
     await draw.waitForTimeout(1050);
   }
@@ -183,8 +198,10 @@ test("touch pointer strokes, transparent composite, outline, undo, erase, clear 
   await draw.mouse.click(b.x + b.width * 0.5, b.y + b.height * 0.5);
   await context.setOffline(true);
   await expect(draw.getByRole("status")).toContainText("끊겼어요");
-  await draw.getByRole("button", { name: /슝! 날려 보내기/ }).click();
+  await draw.getByRole("button", { name: "✓ 다 그렸어요" }).click();
+  await fling(draw, "사과 그림 그리는 도화지");
   await expect(draw.getByRole("status")).toContainText("그림은 그대로");
+  await expect(draw.getByRole("status")).toContainText("다시 위로");
   expect(
     await c.evaluate(
       (el: HTMLCanvasElement) =>
@@ -193,7 +210,8 @@ test("touch pointer strokes, transparent composite, outline, undo, erase, clear 
   ).toBeGreaterThan(0);
   await context.setOffline(false);
   await expect(draw.getByRole("status")).toContainText("연결됐어요");
-  await draw.getByRole("button", { name: "다시 보내기" }).click();
+  await draw.waitForTimeout(700);
+  await fling(draw, "사과 그림 그리는 도화지");
   await expect(draw.getByRole("status")).toContainText("짜잔");
   await context.close();
 });
@@ -238,5 +256,11 @@ test("drawing upwards never sends; ready drag can cancel or launch", async ({
   await draw.mouse.up();
   await expect(draw.getByRole("status")).toContainText("짜잔");
   expect(launches).toBe(1);
+  // A short but quick upward flick also throws the paper.
+  await draw.waitForTimeout(1100);
+  await draw.getByRole("button", { name: "✓ 다 그렸어요" }).click();
+  await fling(draw, "사과 그림 그리는 도화지", 60, 2);
+  await expect.poll(() => launches).toBe(2);
+  await expect(draw.getByRole("status")).toContainText("짜잔");
   await context.close();
 });
