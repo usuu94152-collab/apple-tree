@@ -203,7 +203,7 @@ export function buildLoco(): Vehicle {
     new THREE.MeshStandardMaterial({
       color: "#fff3b0",
       emissive: "#ffd86b",
-      emissiveIntensity: 1.2,
+      emissiveIntensity: 3,
     }),
   );
   lamp.position.set(6.1, 5.4, 0);

@@ -5,6 +5,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { HorizontalTiltShiftShader } from "three/examples/jsm/shaders/HorizontalTiltShiftShader.js";
 import { VerticalTiltShiftShader } from "three/examples/jsm/shaders/VerticalTiltShiftShader.js";
 import { Artwork, MAX_OBJECTS, cleanDesign } from "../../../shared/protocol";
@@ -128,34 +129,48 @@ export function World({
     renderer.shadowMap.enabled = !lite;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.NeutralToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 1.0;
     const scene = new THREE.Scene();
-    const bg = new THREE.Color("#dbe7ec");
-    scene.background = bg;
-    scene.fog = new THREE.Fog(bg, 150, 330);
+    // Soft sky gradient behind the diorama; fog fades the far table into it.
+    const sky = document.createElement("canvas");
+    sky.width = 2;
+    sky.height = 256;
+    const sg = sky.getContext("2d")!,
+      grad = sg.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, "#9fd0ee");
+    grad.addColorStop(0.6, "#d9ecf5");
+    grad.addColorStop(1, "#f2e6d4");
+    sg.fillStyle = grad;
+    sg.fillRect(0, 0, 2, 256);
+    const skyTex = new THREE.CanvasTexture(sky);
+    skyTex.colorSpace = THREE.SRGBColorSpace;
+    scene.background = skyTex;
+    scene.fog = new THREE.Fog("#efe4d3", 190, 420);
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    scene.environmentIntensity = 0.55;
-    scene.add(new THREE.HemisphereLight("#e6f4ff", "#6d8a5a", 0.55));
-    const sun = new THREE.DirectionalLight("#fff3df", 2.6);
-    sun.position.set(-45, 85, 55);
+    scene.environmentIntensity = 0.45;
+    // Low, warm afternoon sun: long readable shadows. Little fill light keeps them visible.
+    scene.add(new THREE.HemisphereLight("#d8ecff", "#5f7a4d", 0.32));
+    const sun = new THREE.DirectionalLight("#ffe2b8", 3.6);
+    sun.position.set(-90, 75, 50);
     sun.castShadow = true;
     sun.shadow.mapSize.set(lite ? 1024 : 4096, lite ? 1024 : 4096);
     Object.assign(sun.shadow.camera, {
-      left: -80,
-      right: 80,
-      top: 70,
-      bottom: -70,
+      left: -95,
+      right: 95,
+      top: 85,
+      bottom: -85,
       near: 10,
-      far: 260,
+      far: 320,
     });
     sun.shadow.camera.updateProjectionMatrix();
-    sun.shadow.bias = -0.0003;
-    sun.shadow.normalBias = 0.04;
+    sun.shadow.bias = -0.0002;
+    sun.shadow.normalBias = 0.05;
+    sun.shadow.radius = 3;
     scene.add(sun);
 
     const camera = new THREE.PerspectiveCamera(28, 1, 1, 700);
-    const target = new THREE.Vector3(0, 2, 9);
+    const target = new THREE.Vector3(0, 0, 4);
     const composer = new EffectComposer(
       renderer,
       new THREE.WebGLRenderTarget(1, 1, {
@@ -164,6 +179,14 @@ export function World({
       }),
     );
     composer.addPass(new RenderPass(scene, camera));
+    // Glow on lamps, the engine headlight and the signal.
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(256, 256),
+      0.5,
+      0.45,
+      0.95,
+    );
+    composer.addPass(bloom);
     const hTilt = new ShaderPass(HorizontalTiltShiftShader),
       vTilt = new ShaderPass(VerticalTiltShiftShader);
     composer.addPass(hTilt);
@@ -618,12 +641,14 @@ export function World({
       const aspect = w / h;
       const far = Math.pow(Math.max(1, 1.65 / aspect), 0.9);
       camera.aspect = aspect;
-      camera.fov = aspect < 1 ? 40 : 34;
-      camera.position.set(0, 2 + 60 * far, 9 + 80 * far);
+      camera.fov = aspect < 1 ? 40 : 32;
+      // Far enough to see the whole diorama on its table, like walking up to a model railway.
+      camera.position.set(0, 2 + 92 * far, 6 + 118 * far);
       camera.updateProjectionMatrix();
       hTilt.uniforms.h.value = 2.4 / (w * renderer.getPixelRatio());
       vTilt.uniforms.v.value = 2.4 / (h * renderer.getPixelRatio());
-      hTilt.uniforms.r.value = vTilt.uniforms.r.value = 0.42;
+      hTilt.uniforms.r.value = vTilt.uniforms.r.value = 0.45;
+      bloom.resolution.set(w / 2, h / 2);
     };
     const resize = () => {
       const r = c.getBoundingClientRect();
@@ -685,8 +710,9 @@ export function World({
       socket.on("artwork", add).on("reset", reset);
     }
 
-    let last = performance.now() / 1000,
-      slow = 0;
+    let last = performance.now() / 1000;
+    const started = last,
+      times: number[] = [];
     renderer.setAnimationLoop((ms: number) => {
       const now = ms / 1000,
         real = now - last,
@@ -717,19 +743,22 @@ export function World({
         p.sprite.scale.multiplyScalar(1 + p.grow * dt);
         p.sprite.material.opacity = Math.min(0.9, (p.life / p.max) * 1.3);
       }
-      const sway = reduce ? 0 : Math.sin(now * 0.07) * 4;
-      camera.position.x = sway;
-      camera.lookAt(target.x + sway * 0.3, target.y, target.z);
-      // Drop the expensive extras on slow machines.
-      if (fancy && real > 0.07) slow++;
-      else slow = Math.max(0, slow - 1);
-      if (fancy && slow > 40) {
-        fancy = false;
-        renderer.setPixelRatio(1);
-        sun.shadow.mapSize.set(1024, 1024);
-        sun.shadow.map?.dispose();
-        sun.shadow.map = null;
-        resize();
+      // A still camera: a moving one makes thousands of tiny studs shimmer.
+      camera.lookAt(target);
+      // Only after loading has settled, and only if it stays slow, drop the post effects once.
+      // Shadows stay on; they are what makes the scene read as real.
+      if (fancy && now - started > 8) {
+        times.push(real);
+        if (times.length > 90) times.shift();
+        const avg = times.reduce((a, b) => a + b, 0) / times.length;
+        if (times.length === 90 && avg > 0.055) {
+          fancy = false;
+          renderer.setPixelRatio(1);
+          sun.shadow.mapSize.set(2048, 2048);
+          sun.shadow.map?.dispose();
+          sun.shadow.map = null;
+          resize();
+        }
       }
       if (fancy) composer.render();
       else renderer.render(scene, camera);

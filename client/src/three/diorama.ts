@@ -325,8 +325,8 @@ function lamp(root: THREE.Group, x: number, z: number, y = 0) {
     new THREE.SphereGeometry(0.7, 16, 12),
     new THREE.MeshStandardMaterial({
       color: "#fff8dc",
-      emissive: "#ffe9a8",
-      emissiveIntensity: 0.6,
+      emissive: "#ffd98a",
+      emissiveIntensity: 2.4,
       roughness: 0.2,
     }),
   );
@@ -370,15 +370,16 @@ export function buildDiorama(): Diorama {
   // Table and the thick baseplate stack.
   const table = mesh(
     new THREE.PlaneGeometry(600, 600),
-    new THREE.MeshStandardMaterial({ color: "#c9a77c", roughness: 0.8 }),
+    new THREE.MeshStandardMaterial({ color: "#a97f5a", roughness: 0.75 }),
     false,
     true,
   );
   table.rotation.x = -Math.PI / 2;
-  table.position.y = -3.2;
+  table.position.y = -3.8;
   root.add(table);
+  // The slab ends below the green plate (never at the same height, or the faces flicker).
   const slab = mesh(roundBox(X1 - X0, 3.2, Z1 - Z0, 0.2), plastic(C.darkGray));
-  slab.position.set(0, -1.6, (Z0 + Z1) / 2);
+  slab.position.set(0, -2.0, (Z0 + Z1) / 2);
   root.add(slab);
   const plate = mesh(
     roundBox(X1 - X0, 0.4, Z1 - Z0, 0.05),
@@ -656,8 +657,8 @@ export function buildDiorama(): Diorama {
   void studGrid;
 
   const signal = (go: boolean) => {
-    red.emissiveIntensity = go ? 0 : 1.6;
-    green.emissiveIntensity = go ? 1.6 : 0;
+    red.emissiveIntensity = go ? 0 : 3;
+    green.emissiveIntensity = go ? 3 : 0;
   };
   signal(true);
   return {
