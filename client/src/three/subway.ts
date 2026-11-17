@@ -600,7 +600,7 @@ export function subwayStage(): Stage {
   // Benches, vending machine, bin.
   for (const x of [-27, -1]) {
     add(roundBox(5, 0.5, 1.6, 0.1), plastic("#3d7fb8"), x, PY + 1.6, 19.4);
-    add(roundBox(5, 1.6, 0.4, 0.1), plastic("#3d7fb8"), x, PY + 2.4, 20.3);
+    add(roundBox(5, 1.6, 0.4, 0.1), plastic("#3d7fb8"), x, PY + 2.4, 18.5);
     for (const dx of [-2, 2])
       add(
         roundBox(0.4, 1.4, 1.2, 0.05),
@@ -1008,6 +1008,33 @@ export function subwayStage(): Stage {
       ],
     }),
     hopHeight: 0.8,
+    benches: [-27, -1].flatMap((x) =>
+      [-1.6, 0, 1.6].map((dx) => ({
+        pos: new THREE.Vector3(x + dx, PY + 0.3, 19.4),
+        yaw: 0,
+        approach: new THREE.Vector3(x + dx, PY, 21.0),
+      })),
+    ),
+    wander() {
+      for (;;) {
+        const p = new THREE.Vector3(
+          -46 + Math.random() * 72,
+          PY,
+          6.5 + Math.random() * 10.5,
+        );
+        const pillar = [-40, -14, 12].some(
+          (px) => Math.abs(p.x - px) < 2 && Math.abs(p.z - 12.4) < 2,
+        );
+        const bench = [-27, -1].some(
+          (bx) => Math.abs(p.x - bx) < 3.6 && p.z > 17.2,
+        );
+        if (!pillar && !bench) return p;
+      }
+    },
+    watchSpot: () => ({
+      pos: new THREE.Vector3(-44 + Math.random() * 68, PY, 5.7),
+      yaw: Math.PI,
+    }),
     hasDoors: true,
     setDoors(open) {
       for (const l of psdLeaves) l.m.position.x = l.base + l.dir * open * 1.5;

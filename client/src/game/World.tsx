@@ -34,7 +34,10 @@ type State =
   | "hopIn"
   | "riding"
   | "hopOut"
-  | "leaving";
+  | "leaving"
+  | "idle";
+/** What a friend on the platform feels like doing next. */
+type Plan = "ride" | "sit" | "stroll" | "watch" | "exit";
 interface Friend {
   id: string;
   fig: Figure;
@@ -53,6 +56,51 @@ interface Friend {
   to: THREE.Vector3;
   path?: Path;
   leg: number;
+  plan: Plan;
+  /** Phase inside a plan: walking there, then doing it. */
+  doing: boolean;
+  until: number;
+  pause: number;
+  yaw: number;
+  bench: number;
+  rides: number;
+  arrivedAt: number;
+  unload: boolean;
+  wave: number;
+  spinAt: number;
+  armBase: number;
+}
+const EMOJI = ["💖", "⭐", "🎵", "😊", "✨", "🌈"];
+const bubbleTextures = new Map<string, THREE.Texture>();
+function bubbleTexture(emoji: string) {
+  let t = bubbleTextures.get(emoji);
+  if (!t) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const x = c.getContext("2d")!;
+    x.fillStyle = "#ffffff";
+    x.beginPath();
+    x.arc(64, 58, 50, 0, Math.PI * 2);
+    x.moveTo(50, 100);
+    x.lineTo(64, 124);
+    x.lineTo(78, 100);
+    x.fill();
+    x.font =
+      "64px 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif";
+    x.textAlign = "center";
+    x.textBaseline = "middle";
+    x.fillText(emoji, 64, 62);
+    t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    bubbleTextures.set(emoji, t);
+  }
+  return t;
+}
+/** Turn smoothly toward an angle along the short way round. */
+function turn(o: THREE.Object3D, yaw: number, k: number) {
+  let d = yaw - o.rotation.y;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  o.rotation.y += d * Math.min(1, k);
 }
 interface Puff {
   sprite: THREE.Sprite;
@@ -315,14 +363,26 @@ export function World({
           from: new THREE.Vector3(),
           to: new THREE.Vector3(),
           leg: 0,
+          plan: "ride",
+          doing: false,
+          until: 0,
+          pause: 0,
+          yaw: 0,
+          bench: -1,
+          rides: 0,
+          arrivedAt: now,
+          unload: false,
+          wave: 0,
+          spinAt: 0,
+          armBase: fig.armR.rotation.x,
         };
         fig.root.position.set(s.x, 48, s.z);
         scene.add(fig.root);
         friends.push(f);
         if (restored || reduce) {
-          f.state = "waiting";
           fig.root.position.copy(s);
           ack(f);
+          choose(f, now, true);
         } else if (stage.arrival === "fall") play("launch");
         else {
           // Comes in from the street (escalator) instead of the sky.
@@ -333,12 +393,21 @@ export function World({
           ack(f);
           play("pop");
         }
+        // Keep the platform from overflowing: someone who has already ridden
+        // (or else whoever has been around longest) heads into the station.
+        const onPlatform = friends.filter(
+          (x) => x !== f && (x.state === "idle" || x.state === "waiting"),
+        );
         const crowd = friends.filter(
           (x) => x.state !== "leaving" && x.state !== "hopOut",
         );
-        if (crowd.length > MAX_OBJECTS || waiting().length > stage.maxWaiting) {
-          const oldest = crowd.find((x) => x.state === "waiting");
-          if (oldest && oldest !== f) leave(oldest, now);
+        if (
+          crowd.length > MAX_OBJECTS ||
+          onPlatform.length > Math.min(18, stage.maxWaiting) ||
+          waiting().length > stage.maxWaiting
+        ) {
+          const goer = onPlatform.find((x) => x.rides > 0) ?? onPlatform[0];
+          if (goer) startExit(goer);
         }
       } catch {
         /* No arrival confirmation if the picture cannot be decoded. */
@@ -347,6 +416,7 @@ export function World({
       }
     };
     const remove = (f: Friend) => {
+      freeBench(f);
       f.fig.root.removeFromParent();
       f.fig.dispose();
       friends.splice(friends.indexOf(f), 1);
@@ -355,6 +425,8 @@ export function World({
       resetVersion++;
       for (const f of [...friends]) remove(f);
       seats.fill(null);
+      benchTaken.fill(null);
+      for (const b of bubbles.splice(0)) b.s.removeFromParent();
     };
     const leave = (f: Friend, now: number) => {
       if (f.state === "riding") {
@@ -369,9 +441,156 @@ export function World({
       f.t0 = now;
     };
     const startExit = (f: Friend) => {
+      freeBench(f);
       f.state = "leaving";
       f.path = stage.exitPath(f.fig.root.position);
       f.leg = 0;
+    };
+    // Platform life: sit on benches, stroll, watch trains, go into the station.
+    const benchTaken: (Friend | null)[] = stage.benches.map(() => null);
+    const freeBench = (f: Friend) => {
+      if (f.bench >= 0 && benchTaken[f.bench] === f) benchTaken[f.bench] = null;
+      f.bench = -1;
+    };
+    const bubbles: { s: THREE.Sprite; f: Friend; life: number }[] = [];
+    const bubble = (
+      f: Friend,
+      emoji = EMOJI[Math.floor(Math.random() * EMOJI.length)],
+    ) => {
+      if (bubbles.some((b) => b.f === f)) return;
+      const s = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: bubbleTexture(emoji),
+          transparent: true,
+          depthWrite: false,
+        }),
+      );
+      s.scale.setScalar(4.2);
+      scene.add(s);
+      bubbles.push({ s, f, life: 1.8 });
+    };
+    const emote = (f: Friend, now: number) => {
+      const r = Math.random();
+      if (r < 0.3) f.wave = now + 1.6;
+      else if (r < 0.5) f.hit = now;
+      else if (r < 0.65) f.spinAt = now;
+      bubble(f);
+    };
+    const choose = (f: Friend, now: number, first = false) => {
+      freeBench(f);
+      const r = Math.random(),
+        canExit = f.rides > 0 && now - f.arrivedAt > 40;
+      let plan: Plan;
+      // A new friend mostly wants to ride first; later the day gets more varied.
+      if (first)
+        plan =
+          r < 0.7 ? "ride" : r < 0.8 ? "stroll" : r < 0.9 ? "sit" : "watch";
+      else if (canExit && r < 0.14) plan = "exit";
+      else
+        plan =
+          r < 0.42 ? "ride" : r < 0.64 ? "stroll" : r < 0.84 ? "sit" : "watch";
+      setPlan(f, plan, now);
+    };
+    const setPlan = (f: Friend, plan: Plan, now: number) => {
+      f.plan = plan;
+      f.doing = false;
+      f.pause = 0;
+      f.until = now + 9 + Math.random() * 9;
+      if (plan === "ride") {
+        f.state = "waiting";
+        return;
+      }
+      if (plan === "exit") return startExit(f);
+      f.state = "idle";
+      if (plan === "sit") {
+        const free = benchTaken.findIndex((b) => !b);
+        if (free < 0) return setPlan(f, "stroll", now);
+        benchTaken[free] = f;
+        f.bench = free;
+        f.to.copy(stage.benches[free].approach);
+      } else if (plan === "stroll") f.to.copy(stage.wander());
+      else {
+        const w = stage.watchSpot();
+        f.to.copy(w.pos);
+        f.yaw = w.yaw;
+      }
+    };
+    /** Walk across the platform to a point; true on arrival. */
+    const walkTo = (
+      f: Friend,
+      target: THREE.Vector3,
+      dt: number,
+      now: number,
+      speed = 5,
+    ) => {
+      const r = f.fig.root;
+      const d = target.clone().sub(r.position);
+      d.y = 0;
+      const dist = d.length();
+      if (dist < 0.12) return true;
+      r.position.addScaledVector(d.normalize(), Math.min(dist, speed * dt));
+      turn(r, Math.atan2(d.x, d.z), dt * 10);
+      pose(f.fig, now * (speed + 5));
+      return false;
+    };
+    const idle = (f: Friend, now: number, dt: number) => {
+      const r = f.fig.root;
+      if (f.plan === "sit") {
+        const b = stage.benches[f.bench];
+        if (!f.doing) {
+          if (walkTo(f, f.to, dt, now)) {
+            f.doing = true;
+            r.position.copy(b.pos);
+            r.rotation.y = b.yaw;
+          }
+          return;
+        }
+        pose(f.fig, 0, true);
+        f.fig.head.rotation.y = Math.sin(now * 0.6 + f.seed) * 0.5;
+        f.fig.legL.rotation.x =
+          -Math.PI / 2 + Math.max(0, Math.sin(now * 3 + f.seed)) * 0.25;
+        if (Math.random() < dt * 0.12) emote(f, now);
+        if (now > f.until) {
+          r.position.copy(b.approach);
+          choose(f, now);
+        }
+        return;
+      }
+      if (f.plan === "stroll") {
+        if (now < f.pause) {
+          pose(f.fig, 0);
+          f.fig.head.rotation.y = Math.sin(now * 1.3 + f.seed) * 0.6;
+          return;
+        }
+        if (walkTo(f, f.to, dt, now, 4)) {
+          if (now > f.until) return choose(f, now);
+          f.pause = now + 1.2 + Math.random() * 2.5;
+          turn(r, 0, 1);
+          emote(f, now);
+          f.to.copy(stage.wander());
+        }
+        return;
+      }
+      // Watching trains go by, waving at them.
+      if (!f.doing) {
+        if (walkTo(f, f.to, dt, now)) f.doing = true;
+        return;
+      }
+      turn(r, f.yaw, dt * 6);
+      pose(f.fig, 0);
+      const near =
+        train.mode !== "stopped" &&
+        train.v > 1 &&
+        vehicles.some(
+          (v) =>
+            Math.abs(v.group.position.x - r.position.x) < 14 &&
+            Math.abs(v.group.position.z - r.position.z) < 16,
+        );
+      if (near) {
+        f.wave = now + 0.5;
+        if (Math.random() < dt * 0.6) bubble(f, "👋");
+      }
+      if (now > f.until) choose(f, now);
     };
     const board = (f: Friend, seat: number, now: number) => {
       seats[seat] = f;
@@ -436,6 +655,13 @@ export function World({
           train.lastAction = now;
           train.stops++;
           play(stage.sounds.stop);
+          // Some on the platform decide to hop on; some riders get off here.
+          for (const f of friends) {
+            if (f.state === "idle" && Math.random() < (f.rides ? 0.3 : 0.6))
+              setPlan(f, "ride", now);
+            if (f.state === "riding" && f.stop !== train.stops)
+              f.unload = Math.random() < 0.35;
+          }
         }
       }
       if (train.mode === "stopped") {
@@ -451,8 +677,13 @@ export function World({
         const ready = !stage.hasDoors || train.doors >= 1;
         if (ready && now - train.t0 > 1 && now - train.lastAction > 0.6) {
           const next = waiting()[0],
-            free = seats.findIndex((s) => !s);
-          if (next && free >= 0) {
+            free = seats.findIndex((s) => !s),
+            off = seats.find((s) => s && s.state === "riding" && s.unload);
+          if (off) {
+            off.unload = false;
+            leave(off, now);
+            train.lastAction = now;
+          } else if (next && free >= 0) {
             board(next, free, now);
             train.lastAction = now;
           } else if (next) {
@@ -469,11 +700,12 @@ export function World({
           }
         }
         const canBoard =
-          waiting().length > 0 &&
-          (seats.some((s) => !s) ||
-            seats.some(
-              (s) => s && s.state === "riding" && s.stop !== train.stops,
-            ));
+          seats.some((s) => s && s.state === "riding" && s.unload) ||
+          (waiting().length > 0 &&
+            (seats.some((s) => !s) ||
+              seats.some(
+                (s) => s && s.state === "riding" && s.stop !== train.stops,
+              )));
         if (
           !canBoard &&
           !busy &&
@@ -544,11 +776,17 @@ export function World({
       f.fig.body.position.y = Math.sin(jump * Math.PI) * 2.2;
       f.fig.armR.rotation.z =
         -0.12 - (jump > 0 ? Math.sin(now * 18) * 0.4 + 0.8 : 0);
+      // Waving and twirling.
+      f.fig.armR.rotation.x =
+        now < f.wave ? -2.7 + Math.sin(now * 12) * 0.35 : f.armBase;
+      const spin = now - f.spinAt;
+      f.fig.body.rotation.y = spin < 0.8 ? ease(spin / 0.8) * Math.PI * 2 : 0;
+      if (f.state === "idle") return idle(f, now, dt);
       if (f.fig.flag) f.fig.flag.rotation.y = Math.sin(now * 5 + f.seed) * 0.25;
       if (f.state === "arriving") {
         if (follow(f, dt, now)) {
-          f.state = "waiting";
           f.path = undefined;
+          choose(f, now, true);
         }
         return;
       }
@@ -578,10 +816,10 @@ export function World({
               );
             }
           } else {
-            f.state = "waiting";
             r.rotation.z = 0;
             f.vy = 0;
             ack(f);
+            choose(f, now, true);
             sparkle(r.position.clone().add(new THREE.Vector3(0, 4, 0)));
           }
         }
@@ -595,11 +833,10 @@ export function World({
         if (dist > 0.05) {
           const step = Math.min(dist, 6 * dt);
           r.position.addScaledVector(d.normalize(), step);
-          r.rotation.y +=
-            (Math.atan2(d.x, d.z) - r.rotation.y) * Math.min(1, dt * 10);
+          turn(r, Math.atan2(d.x, d.z), dt * 10);
           pose(f.fig, now * 10);
         } else {
-          r.rotation.y += (0 - r.rotation.y) * Math.min(1, dt * 4);
+          turn(r, 0, dt * 4);
           pose(f.fig, 0);
           f.fig.head.rotation.y = Math.sin(now * 0.7 + f.seed) * 0.35;
         }
@@ -638,6 +875,8 @@ export function World({
           f.state = "riding";
           f.boardedAt = now;
           f.stop = train.stops;
+          f.rides++;
+          f.unload = false;
         }
         return;
       }
@@ -655,8 +894,8 @@ export function World({
         r.rotation.y = (k * -Math.PI) / 2;
         pose(f.fig, 0, stage.hopHeight > 1 && k < 0.4);
         if (k >= 1) {
-          startExit(f);
           f.t0 = now;
+          choose(f, now);
         }
         return;
       }
@@ -728,7 +967,7 @@ export function World({
     if (demo) {
       let n = 0;
       const drop = () => {
-        if (disposed) return;
+        if (disposed || friends.length >= 12) return;
         const d = sampleDesigns[n++ % sampleDesigns.length];
         void add({
           messageId: "demo-" + n,
@@ -779,6 +1018,20 @@ export function World({
         p.vel.multiplyScalar(1 - dt * 0.8);
         p.sprite.scale.multiplyScalar(1 + p.grow * dt);
         p.sprite.material.opacity = Math.min(0.9, (p.life / p.max) * 1.3);
+      }
+      // Emoji bubbles float above their friend and fade.
+      for (let i = bubbles.length - 1; i >= 0; i--) {
+        const b = bubbles[i];
+        b.life -= dt;
+        if (b.life <= 0 || !friends.includes(b.f)) {
+          b.s.removeFromParent();
+          b.s.material.dispose();
+          bubbles.splice(i, 1);
+          continue;
+        }
+        b.f.fig.root.getWorldPosition(b.s.position);
+        b.s.position.y += 7 + (1.8 - b.life) * 0.6;
+        b.s.material.opacity = Math.min(1, b.life * 2);
       }
       // A still camera: a moving one makes thousands of tiny studs shimmer.
       camera.lookAt(target);

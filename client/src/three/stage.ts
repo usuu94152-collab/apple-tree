@@ -49,6 +49,12 @@ export interface Stage {
   alightPoint: (seat: THREE.Vector3) => THREE.Vector3;
   exitPath: (from: THREE.Vector3) => Path;
   hopHeight: number;
+  /** Bench seats: where a sitting friend's feet-origin goes, which way they face, where they step from. */
+  benches: { pos: THREE.Vector3; yaw: number; approach: THREE.Vector3 }[];
+  /** A random free spot on the platform to stroll to. */
+  wander: () => THREE.Vector3;
+  /** A spot near the track to stand and watch trains, and which way to face. */
+  watchSpot: () => { pos: THREE.Vector3; yaw: number };
   hasDoors: boolean;
   setDoors: (open: number) => void;
   master: { pos: THREE.Vector3; yaw: number };

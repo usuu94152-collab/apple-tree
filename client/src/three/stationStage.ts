@@ -93,8 +93,34 @@ export function stationStage(): Stage {
     boardPoint: (seat) => new THREE.Vector3(seat.x, P.y, P.z0 + 1.2),
     alightPoint: (seat) => new THREE.Vector3(seat.x, P.y, P.z0 + 1.6),
     // Stroll along the platform into the station building.
+    // Walk to the end of the platform and into the station building's side door.
     exitPath: (from) => ({
-      points: [new THREE.Vector3(P.x0 + 0.5, P.y, from.z)],
+      points: [
+        new THREE.Vector3(Math.max(P.x0 + 1, Math.min(from.x, P.x1)), P.y, 24),
+        new THREE.Vector3(-35, P.y, 24),
+        new THREE.Vector3(-41, P.y, 24),
+      ],
+    }),
+    benches: [-24, 24].flatMap((x) =>
+      [-1, 1].map((dx) => ({
+        pos: new THREE.Vector3(x + dx, P.y - 0.15, P.z1 - 1.2),
+        yaw: 0,
+        approach: new THREE.Vector3(x + dx, P.y, P.z1 - 2.6),
+      })),
+    ),
+    wander() {
+      for (;;) {
+        const p = new THREE.Vector3(
+          -30 + Math.random() * 60,
+          P.y,
+          21.6 + Math.random() * 3.6,
+        );
+        if (!(Math.abs(Math.abs(p.x) - 24) < 3.2 && p.z > 24.5)) return p;
+      }
+    },
+    watchSpot: () => ({
+      pos: new THREE.Vector3(-28 + Math.random() * 56, P.y, P.z0 + 2.0),
+      yaw: Math.PI,
     }),
     hopHeight: 5,
     hasDoors: false,

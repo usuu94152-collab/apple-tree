@@ -242,6 +242,13 @@ function stationHouse(root: THREE.Group, x: number, z: number) {
   const door = mesh(roundBox(4, 5.4, 0.4, 0.15), plastic(C.darkBlue));
   door.position.set(0, 2.7, d / 2);
   g.add(door);
+  // Side door at platform height, where friends walk into the station.
+  const side = mesh(roundBox(0.4, 4.6, 3.4, 0.15), plastic(C.darkBlue));
+  side.position.set(w / 2 + 0.05, 2.4 + 2.3, -2);
+  g.add(side);
+  const sideFrame = mesh(roundBox(0.3, 5.2, 4.2, 0.1), plastic(C.white));
+  sideFrame.position.set(w / 2 - 0.02, 2.4 + 2.5, -2);
+  g.add(sideFrame);
   const doorGlass = mesh(roundBox(3.2, 2.4, 0.3, 0.1), glass, false, false);
   doorGlass.position.set(0, 3.6, d / 2 + 0.12);
   g.add(doorGlass);
@@ -468,6 +475,12 @@ export function buildDiorama(): Diorama {
       );
 
   stationHouse(root, -46, 26);
+  const walkway = mesh(
+    roundBox(4.4, PLATFORM.y - 0.2, 4.4, 0.1),
+    plastic("#9ea3a6"),
+  );
+  walkway.position.set(-36, (PLATFORM.y - 0.2) / 2, 24);
+  root.add(walkway);
   for (const x of [P.x0 + 1.5, P.x1 - 1.5]) lamp(root, x, P.z1 - 1.5, P.y);
   for (const x of [-24, 24]) {
     const bench = brick(4, 1, 0.8, C.reddishBrown, false);
