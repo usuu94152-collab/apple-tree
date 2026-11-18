@@ -298,5 +298,15 @@ test("drawing upwards never sends; ready drag can cancel or launch", async ({
   await expect(draw.getByRole("status")).toContainText("짜잔", {
     timeout: 30_000,
   });
+  // The child picks the subway on the tablet; the big screen follows.
+  await draw.getByRole("button", { name: "🚇 지하철역" }).click();
+  await expect(
+    draw.getByRole("button", { name: "🚇 지하철역" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("canvas.world-canvas")).toHaveAttribute(
+    "aria-label",
+    /지하철역/,
+    { timeout: 90_000 },
+  );
   await context.close();
 });

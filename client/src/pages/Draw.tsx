@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Artwork } from "../../../shared/protocol";
+import { Artwork, StageId } from "../../../shared/protocol";
+import { stageIds, stageNames } from "../three/stage";
 import {
   Design,
   FaceId,
@@ -65,7 +66,8 @@ export function Draw() {
     [ready, setReady] = useState(false),
     [busy, setBusy] = useState(false),
     [muted, setMuted] = useState(!soundEnabled()),
-    [success, setSuccess] = useState(false);
+    [success, setSuccess] = useState(false),
+    [stage, setStage] = useState<StageId | undefined>();
   const drawing = useRef<DrawingHandle>(null),
     pending = useRef<Artwork | null>(null),
     history = useRef<Step[]>([]),
@@ -92,6 +94,7 @@ export function Draw() {
       try {
         const r = await request("join-room", { roomId: room.current });
         setJoined(r.ok);
+        if (r.stage) setStage(r.stage);
         if (r.ok) {
           sessionStorage.setItem("draw-room", room.current);
           setStatus("연결됐어요! 블록 친구를 꾸며 보세요.");
@@ -112,6 +115,7 @@ export function Draw() {
       socket.connect();
     };
     const shown = (p: { messageId: string }) => waiter.current?.(p.messageId);
+    const picked = (p: { stage: StageId }) => setStage(p?.stage);
     const displayOff = () =>
       setStatus("큰 화면이 다시 연결되기를 기다리고 있어요.");
     socket
@@ -119,7 +123,8 @@ export function Draw() {
       .on("disconnect", off)
       .on("room-closed", closed)
       .on("artwork-displayed", shown)
-      .on("display-offline", displayOff);
+      .on("display-offline", displayOff)
+      .on("stage", picked);
     socket.connect();
     return () => {
       socket
@@ -127,7 +132,8 @@ export function Draw() {
         .off("disconnect", off)
         .off("room-closed", closed)
         .off("artwork-displayed", shown)
-        .off("display-offline", displayOff);
+        .off("display-offline", displayOff)
+        .off("stage", picked);
       socket.disconnect();
       clearTimeout(timer.current);
     };
@@ -207,6 +213,7 @@ export function Draw() {
       if (pending.current?.roomId !== code) pending.current = null;
       sessionStorage.setItem("draw-room", code);
       setDesignState(loadDesign(code));
+      if (r.stage) setStage(r.stage);
       setJoined(true);
       setStatus("연결됐어요! 블록 친구를 꾸며 보세요.");
     } catch (e) {
@@ -433,6 +440,23 @@ export function Draw() {
                   play();
                 }}
               />
+            ))}
+          </div>
+          <div className="dest-pick" role="group" aria-label="보낼 곳">
+            <span>어디로 보낼까요?</span>
+            {stageIds.map((id) => (
+              <button
+                key={id}
+                aria-pressed={stage === id}
+                className={stage === id ? "on" : ""}
+                onClick={() => {
+                  setStage(id);
+                  play();
+                  void request("set-stage", { stage: id }).catch(() => {});
+                }}
+              >
+                {stageNames[id]}
+              </button>
             ))}
           </div>
           <div className="launch-row">

@@ -430,6 +430,7 @@ strong {
     "tools canvas"
     "tip tip"
     "palette palette"
+    "dest dest"
     "launch launch"
     "status status";
   gap: 12px 16px;
@@ -737,11 +738,12 @@ strong {
   .studio {
     max-width: 1240px;
     grid-template-columns: 84px minmax(0, 1fr) minmax(280px, 360px);
-    grid-template-rows: auto auto auto auto 1fr;
+    grid-template-rows: auto auto auto auto auto 1fr;
     grid-template-areas:
       "title title title"
       "tools canvas dress"
       "tools canvas palette"
+      "tools canvas dest"
       "tools canvas launch"
       "tip tip status";
   }
@@ -783,6 +785,7 @@ strong {
       "tools"
       "tip"
       "palette"
+      "dest"
       "launch"
       "status";
   }
@@ -886,6 +889,78 @@ strong {
   border-radius: 10px;
   background: var(--gray);
   font-weight: 700;
+}
+.display-page .world-canvas {
+  touch-action: none;
+  cursor: grab;
+}
+.display-page .world-canvas:active {
+  cursor: grabbing;
+}
+.zoom-bar {
+  position: absolute;
+  right: 22px;
+  bottom: 52px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zoom-bar button {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  background: var(--paper);
+  font-size: 24px;
+  font-weight: 800;
+  box-shadow: 0 4px 0 var(--gray-d);
+}
+.stage-bar {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  translate: -50% 0;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  background: var(--paper);
+  border-radius: 999px;
+  box-shadow: 0 4px 0 var(--gray-d);
+}
+.stage-bar button {
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-family: var(--display);
+  font-size: 18px;
+}
+.stage-bar button.on {
+  background: var(--blue);
+  color: #fff;
+}
+.dest-pick {
+  grid-area: dest;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.dest-pick button {
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: var(--paper);
+  font-family: var(--display);
+  font-size: 18px;
+  color: var(--ink);
+  box-shadow: 0 4px 0 var(--gray-d);
+}
+.dest-pick button.on {
+  background: var(--blue);
+  color: #fff;
+  box-shadow: 0 4px 0 var(--blue-d);
 }
 .stage-pick {
   display: flex;
@@ -991,7 +1066,7 @@ strong {
 }
 .display-alert {
   position: absolute;
-  top: 18px;
+  top: 80px;
   left: 50%;
   translate: -50% 0;
   z-index: 4;

@@ -119,6 +119,23 @@ test("dress-up design is kept only when every field is valid", async () => {
     assert.equal((await next).design, undefined);
   }
 });
+test("a tablet can pick the place; the big screen and newcomers hear it", async () => {
+  const { t, d, r } = await pair();
+  const heard = new Promise<any>((resolve) => d.once("stage", resolve));
+  assert.equal((await ask(t, "set-stage", { stage: "subway" })).ok, true);
+  assert.equal((await heard).stage, "subway");
+  assert.equal((await ask(t, "set-stage", { stage: "moon" })).ok, false);
+  const late = await client();
+  assert.equal(
+    (await ask(late, "join-room", { roomId: r.roomId })).stage,
+    "subway",
+  );
+  const outsider = await client();
+  assert.equal(
+    (await ask(outsider, "set-stage", { stage: "station" })).ok,
+    false,
+  );
+});
 test("strict image size and decode; rapid launches throttled", async () => {
   const { t, r } = await pair();
   assert.equal(

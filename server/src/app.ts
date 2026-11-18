@@ -9,6 +9,8 @@ import {
   Reply,
   objectTypes,
   cleanDesign,
+  stageIds,
+  StageId,
   MAX_IMAGE_BYTES,
   MAX_OBJECTS,
 } from "../../shared/protocol.js";
@@ -18,6 +20,7 @@ interface Room {
   emptySince?: number;
   artworks: Artwork[];
   seen: Map<string, boolean>;
+  stage?: StageId;
 }
 export function createApp() {
   const app = express(),
@@ -94,6 +97,7 @@ export function createApp() {
         roomId: p.roomId,
         token: r.token,
         artworks: r.artworks,
+        stage: r.stage,
       });
       participants(p.roomId);
     });
@@ -108,7 +112,11 @@ export function createApp() {
         );
       s.data = { role: "draw", roomId: p.roomId, lastLaunch: 0 };
       s.join(p.roomId);
-      reply(ack, { ok: true, roomId: p.roomId });
+      reply(ack, {
+        ok: true,
+        roomId: p.roomId,
+        stage: rooms.get(p.roomId)!.stage,
+      });
       participants(p.roomId);
     });
     s.on("send-artwork", async (p: any, ack: unknown) => {
@@ -171,6 +179,16 @@ export function createApp() {
       } finally {
         s.data.busy = false;
       }
+    });
+    // Anyone in the room (big screen or tablet) may pick the place; everyone hears it.
+    s.on("set-stage", (p: any, ack: unknown) => {
+      const r = rooms.get(s.data.roomId);
+      if (!r || !s.data.role) return fail(ack, "놀이방에 먼저 연결해 주세요.");
+      if (!stageIds.includes(p?.stage))
+        return fail(ack, "장소를 확인해 주세요.");
+      r.stage = p.stage;
+      io.to(s.data.roomId).emit("stage", { stage: r.stage });
+      reply(ack, { ok: true, stage: r.stage });
     });
     s.on("artwork-ready", (p: any) => {
       const r = rooms.get(s.data.roomId);

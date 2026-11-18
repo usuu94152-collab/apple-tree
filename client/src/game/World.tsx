@@ -147,10 +147,13 @@ export function World({
   initial,
   demo = false,
   stage: stageId = "station",
+  zoomable = false,
 }: {
   initial: Artwork[];
   demo?: boolean;
   stage?: StageId;
+  /** Wheel / pinch / drag zoom (the big screen); off for the home preview. */
+  zoomable?: boolean;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -910,16 +913,73 @@ export function World({
       }
     };
 
-    // Camera framing that keeps the platform in view on any screen shape.
+    // Camera framing that keeps the platform in view on any screen shape,
+    // plus zoom and pan on top of it.
     let w = 1,
       h = 1;
+    const baseTarget = new THREE.Vector3(),
+      baseOffset = new THREE.Vector3();
+    const view = {
+      zoom: 1,
+      wantZoom: 1,
+      pan: new THREE.Vector3(),
+      wantPan: new THREE.Vector3(),
+    };
+    const MAX_ZOOM = 4;
+    // Less miniature blur when zoomed in, so close-ups stay sharp.
+    const blur = () => {
+      const k = 2.4 / Math.max(1, view.zoom * 0.9);
+      hTilt.uniforms.h.value = k / (w * renderer.getPixelRatio());
+      vTilt.uniforms.v.value = k / (h * renderer.getPixelRatio());
+    };
+    const clampPan = () => {
+      const room = 1 - 1 / view.wantZoom;
+      view.wantPan.x = THREE.MathUtils.clamp(
+        view.wantPan.x,
+        -60 * room,
+        60 * room,
+      );
+      view.wantPan.z = THREE.MathUtils.clamp(
+        view.wantPan.z,
+        -45 * room,
+        30 * room,
+      );
+      view.wantPan.y = 0;
+    };
+    const ground = new THREE.Plane(
+      new THREE.Vector3(0, 1, 0),
+      -stage.platformY,
+    );
+    /** The point on the platform level under a screen position. */
+    const groundAt = (x: number, y: number) => {
+      const r = c.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((x - r.left) / r.width) * 2 - 1,
+        -((y - r.top) / r.height) * 2 + 1,
+      );
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(ndc, camera);
+      return rc.ray.intersectPlane(ground, new THREE.Vector3());
+    };
+    /** Zoom by a factor, keeping the spot under (x, y) roughly in place. */
+    const zoomAt = (factor: number, x?: number, y?: number) => {
+      const old = view.wantZoom;
+      view.wantZoom = THREE.MathUtils.clamp(old * factor, 1, MAX_ZOOM);
+      const p = x !== undefined && y !== undefined ? groundAt(x, y) : null;
+      if (p) {
+        const t = baseTarget.clone().add(view.wantPan);
+        view.wantPan.add(p.sub(t).multiplyScalar(1 - old / view.wantZoom));
+      }
+      if (view.wantZoom === 1) view.wantPan.set(0, 0, 0);
+      clampPan();
+    };
     const frame = () => {
       const aspect = w / h;
       camera.aspect = aspect;
-      target = stage.frame(camera, aspect);
+      baseTarget.copy(stage.frame(camera, aspect));
+      baseOffset.copy(camera.position).sub(baseTarget);
       camera.updateProjectionMatrix();
-      hTilt.uniforms.h.value = 2.4 / (w * renderer.getPixelRatio());
-      vTilt.uniforms.v.value = 2.4 / (h * renderer.getPixelRatio());
+      blur();
       hTilt.uniforms.r.value = vTilt.uniforms.r.value = stage.focus;
       bloom.resolution.set(w / 2, h / 2);
     };
@@ -1033,7 +1093,17 @@ export function World({
         b.s.position.y += 7 + (1.8 - b.life) * 0.6;
         b.s.material.opacity = Math.min(1, b.life * 2);
       }
-      // A still camera: a moving one makes thousands of tiny studs shimmer.
+      // A still camera (it only moves when you zoom or drag): a drifting one makes the studs shimmer.
+      const k = Math.min(1, dt * 8);
+      const settle =
+        Math.abs(view.wantZoom - view.zoom) + view.wantPan.distanceTo(view.pan);
+      if (settle > 1e-4) {
+        view.zoom += (view.wantZoom - view.zoom) * k;
+        view.pan.lerp(view.wantPan, k);
+        blur();
+      }
+      target.copy(baseTarget).add(view.pan);
+      camera.position.copy(target).addScaledVector(baseOffset, 1 / view.zoom);
       camera.lookAt(target);
       // Only after loading has settled, and only if it stays slow, drop the post effects once.
       // Shadows stay on; they are what makes the scene read as real.
@@ -1092,12 +1162,93 @@ export function World({
         return;
       }
     };
-    c.addEventListener("pointerdown", hit);
+    // Taps poke friends; drags pan; two fingers pinch; the wheel zooms.
+    const touches = new Map<number, { x: number; y: number }>();
+    let downAt: { x: number; y: number } | null = null,
+      dragged = false,
+      lastTap = 0;
+    const down = (e: PointerEvent) => {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size === 1) {
+        downAt = { x: e.clientX, y: e.clientY };
+        dragged = false;
+      }
+      try {
+        c.setPointerCapture(e.pointerId);
+      } catch {
+        /* Fine without capture. */
+      }
+    };
+    const move = (e: PointerEvent) => {
+      const prev = touches.get(e.pointerId);
+      if (!prev || !zoomable) return;
+      const cur = { x: e.clientX, y: e.clientY };
+      if (touches.size === 2) {
+        const [a, b] = [...touches.entries()].map(([id, p]) =>
+          id === e.pointerId ? cur : p,
+        );
+        const [pa, pb] = [...touches.entries()].map(([, p]) => p);
+        const before = Math.hypot(pa.x - pb.x, pa.y - pb.y),
+          after = Math.hypot(a.x - b.x, a.y - b.y);
+        if (before > 10)
+          zoomAt(after / before, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        dragged = true;
+      } else if (touches.size === 1 && downAt) {
+        if (Math.hypot(cur.x - downAt.x, cur.y - downAt.y) > 8) dragged = true;
+        if (dragged && view.wantZoom > 1) {
+          const g0 = groundAt(prev.x, prev.y),
+            g1 = groundAt(cur.x, cur.y);
+          if (g0 && g1) {
+            view.wantPan.add(g0.sub(g1));
+            clampPan();
+            view.pan.copy(view.wantPan);
+          }
+        }
+      }
+      touches.set(e.pointerId, cur);
+    };
+    const up = (e: PointerEvent) => {
+      const was = touches.size;
+      touches.delete(e.pointerId);
+      if (was === 1 && !dragged) {
+        hit(e);
+        // Double tap: zoom in there, or back out.
+        const now = performance.now();
+        if (zoomable && now - lastTap < 320) {
+          if (view.wantZoom > 1.2) zoomAt(1 / view.wantZoom);
+          else zoomAt(2.5, e.clientX, e.clientY);
+          lastTap = 0;
+        } else lastTap = now;
+      }
+      if (touches.size === 0) downAt = null;
+    };
+    const wheel = (e: WheelEvent) => {
+      if (!zoomable) return;
+      e.preventDefault();
+      zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+    };
+    const button = (e: Event) => {
+      const what = (e as CustomEvent<string>).detail;
+      if (what === "in") zoomAt(1.5);
+      else if (what === "out") zoomAt(1 / 1.5);
+      else zoomAt(1 / view.wantZoom);
+    };
+    c.addEventListener("pointerdown", down);
+    c.addEventListener("pointermove", move);
+    c.addEventListener("pointerup", up);
+    c.addEventListener("pointercancel", up);
+    c.addEventListener("wheel", wheel, { passive: false });
+    window.addEventListener("world-zoom", button);
     return () => {
+      c.removeEventListener("pointermove", move);
+      c.removeEventListener("pointerup", up);
+      c.removeEventListener("pointercancel", up);
+      c.removeEventListener("wheel", wheel);
+      window.removeEventListener("world-zoom", button);
       disposed = true;
       renderer.setAnimationLoop(null);
       observer.disconnect();
-      c.removeEventListener("pointerdown", hit);
+      c.removeEventListener("pointerdown", down);
       if (demo)
         for (const t of JSON.parse(c.dataset.timers || "[]"))
           (clearTimeout(t), clearInterval(t));
@@ -1107,7 +1258,7 @@ export function World({
       pmrem.dispose();
       renderer.dispose();
     };
-  }, [initial, demo, stageId]);
+  }, [initial, demo, stageId, zoomable]);
   return (
     <canvas
       className="world-canvas"

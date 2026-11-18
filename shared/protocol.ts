@@ -1,4 +1,7 @@
 export const objectTypes = ["figure"] as const;
+/** Places the big screen can show. */
+export const stageIds = ["station", "subway"] as const;
+export type StageId = (typeof stageIds)[number];
 export type ObjectType = (typeof objectTypes)[number];
 export const regionIds = [
   "item",
@@ -84,6 +87,7 @@ export interface Reply {
   token?: string;
   artworks?: Artwork[];
   displayed?: boolean;
+  stage?: StageId;
 }
 export const MAX_OBJECTS = 30;
 export const MAX_IMAGE_BYTES = 400_000;

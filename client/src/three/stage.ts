@@ -4,8 +4,9 @@
 import * as THREE from "three";
 import type { Vehicle } from "./train";
 
-export type StageId = "station" | "subway";
-export const stageIds: StageId[] = ["station", "subway"];
+import { StageId, stageIds as ids } from "../../../shared/protocol";
+export type { StageId };
+export const stageIds: StageId[] = [...ids];
 export const stageNames: Record<StageId, string> = {
   station: "🚂 기차역",
   subway: "🚇 지하철역",

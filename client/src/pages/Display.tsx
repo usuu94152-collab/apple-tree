@@ -30,6 +30,19 @@ export function Display() {
     [stage, setStage] = useState<StageId>(savedStage);
   // Everything the big screen has received, so switching places keeps the friends.
   const seen = useRef<Artwork[]>([]);
+  const current = useRef(stage);
+  /** Show another place, keeping every friend who already arrived. */
+  const switchTo = (id: StageId) => {
+    if (id === current.current) return;
+    current.current = id;
+    try {
+      localStorage.setItem("swoosh-stage", id);
+    } catch {
+      /* Choice lasts for this visit. */
+    }
+    setInitial((was) => (was ? [...seen.current] : was));
+    setStage(id);
+  };
   useEffect(() => {
     let active = true;
     const connect = async () => {
@@ -54,6 +67,10 @@ export function Display() {
         );
         seen.current = [...(r.artworks || [])];
         setInitial(r.artworks || []);
+        // A place picked from a tablet wins; otherwise tell the room ours.
+        if (r.stage) switchTo(r.stage);
+        else
+          void request("set-stage", { stage: current.current }).catch(() => {});
         setError("");
         setQR(
           await QRCode.toDataURL(`${location.origin}/draw?room=${r.roomId}`, {
@@ -79,12 +96,16 @@ export function Display() {
         seen.current = [...seen.current, a].slice(-30);
     };
     const forget = () => (seen.current = []);
+    const picked = (p: { stage: StageId }) => {
+      if (stageIds.includes(p?.stage)) switchTo(p.stage);
+    };
     socket
       .on("connect", connect)
       .on("disconnect", disconnect)
       .on("participants", participants)
       .on("room-closed", end)
       .on("artwork", remember)
+      .on("stage", picked)
       .on("reset", forget);
     socket.connect();
     return () => {
@@ -95,6 +116,7 @@ export function Display() {
         .off("participants", participants)
         .off("room-closed", end)
         .off("artwork", remember)
+        .off("stage", picked)
         .off("reset", forget);
       socket.disconnect();
     };
@@ -117,7 +139,46 @@ export function Display() {
   }
   return (
     <main className="display-page">
-      {initial && <World key={stage} initial={initial} stage={stage} />}
+      {initial && (
+        <World key={stage} initial={initial} stage={stage} zoomable />
+      )}
+      <div className="zoom-bar" role="group" aria-label="화면 확대">
+        {(
+          [
+            ["in", "＋", "확대"],
+            ["out", "－", "축소"],
+            ["reset", "⤢", "전체 보기"],
+          ] as const
+        ).map(([what, icon, label]) => (
+          <button
+            key={what}
+            aria-label={label}
+            title={label}
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent("world-zoom", { detail: what }),
+              )
+            }
+          >
+            {icon}
+          </button>
+        ))}
+      </div>
+      <div className="stage-bar" role="group" aria-label="장소 고르기">
+        {stageIds.map((id) => (
+          <button
+            key={id}
+            aria-pressed={stage === id}
+            className={stage === id ? "on" : ""}
+            onClick={() => {
+              switchTo(id);
+              void request("set-stage", { stage: id }).catch(() => {});
+            }}
+          >
+            {stageNames[id]}
+          </button>
+        ))}
+      </div>
       <a className="display-brand brand" href="/">
         <span className="brand-brick" aria-hidden="true" />
         슝슝 <span>블록 기차역</span>
@@ -135,27 +196,6 @@ export function Display() {
       {menu && (
         <section className="parent-menu">
           <strong>보호자 설정</strong>
-          <div className="stage-pick" role="group" aria-label="장소 고르기">
-            {stageIds.map((id) => (
-              <button
-                key={id}
-                aria-pressed={stage === id}
-                className={stage === id ? "on" : ""}
-                onClick={() => {
-                  if (id === stage) return;
-                  try {
-                    localStorage.setItem("swoosh-stage", id);
-                  } catch {
-                    /* Choice lasts for this visit. */
-                  }
-                  setInitial([...seen.current]);
-                  setStage(id);
-                }}
-              >
-                {stageNames[id]}
-              </button>
-            ))}
-          </div>
           <button
             onClick={() =>
               void document.documentElement
