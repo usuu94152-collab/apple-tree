@@ -4,6 +4,13 @@ import { Artwork } from "../../../shared/protocol";
 import { socket, request } from "../network/socket";
 import { World } from "../game/World";
 import { setSound, soundEnabled } from "../game/sound";
+import {
+  musicEnabled,
+  setMusic,
+  setTune,
+  startMusic,
+  stopMusic,
+} from "../game/music";
 import { StageId, stageIds, stageNames } from "../three/stage";
 function savedStage(): StageId {
   const q = new URLSearchParams(location.search).get("stage");
@@ -27,7 +34,20 @@ export function Display() {
     [closed, setClosed] = useState(false),
     [connected, setConnected] = useState(false),
     [showCode, setShowCode] = useState(false),
-    [stage, setStage] = useState<StageId>(savedStage);
+    [stage, setStage] = useState<StageId>(savedStage),
+    [music, setMusicOn] = useState(musicEnabled());
+  // Each place has its own tune; music starts with the first tap (browser rule).
+  useEffect(() => setTune(stage), [stage]);
+  useEffect(() => {
+    const go = () => startMusic();
+    window.addEventListener("pointerdown", go);
+    window.addEventListener("keydown", go);
+    return () => {
+      window.removeEventListener("pointerdown", go);
+      window.removeEventListener("keydown", go);
+      stopMusic();
+    };
+  }, []);
   // Everything the big screen has received, so switching places keeps the friends.
   const seen = useRef<Artwork[]>([]);
   const current = useRef(stage);
@@ -275,6 +295,14 @@ export function Display() {
           }}
         >
           {sound ? "🔊 소리 켜짐 · 눌러 활성화" : "🔇 소리 꺼짐"}
+        </button>
+        <button
+          onClick={() => {
+            setMusicOn(!music);
+            setMusic(!music);
+          }}
+        >
+          {music ? "🎵 음악 켜짐" : "🎵 음악 꺼짐"}
         </button>
       </div>
     </main>

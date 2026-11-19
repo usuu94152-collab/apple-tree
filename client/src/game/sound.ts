@@ -17,6 +17,12 @@ export function setSound(on: boolean) {
   if (on) play("pop");
 }
 export const soundEnabled = () => enabled;
+/** The one shared audio context (effects and background music). */
+export function audio() {
+  ctx ??= new AudioContext();
+  void ctx.resume();
+  return ctx;
+}
 
 function tone(
   a: AudioContext,
