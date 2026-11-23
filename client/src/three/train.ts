@@ -11,10 +11,14 @@ export interface Vehicle {
   seats: THREE.Vector3[];
   /** Where the driver stands (local), if this vehicle is driven. */
   driverSeat?: THREE.Vector3;
+  /** Which way each seated passenger faces (local yaw); default +z. */
+  seatYaw?: number[];
   /** Passengers stand (subway) instead of sitting (coaches). */
   stand?: boolean;
   /** Slide the doors on the platform side: 0 shut … 1 open. */
   setDoors?: (open: number) => void;
+  /** Per-frame extras (lights, flames, landing legs). */
+  animate?: (t: number, dt: number, speed: number) => void;
   chimney?: THREE.Vector3;
   rods?: THREE.Mesh[];
 }

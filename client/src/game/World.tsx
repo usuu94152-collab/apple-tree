@@ -25,6 +25,7 @@ import { Vehicle } from "../three/train";
 import { Path, Stage, StageId, TrainMode } from "../three/stage";
 import { stationStage } from "../three/stationStage";
 import { subwayStage } from "../three/subway";
+import { spaceportStage } from "../three/spaceport";
 
 type State =
   | "arriving"
@@ -173,7 +174,12 @@ export function World({
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1.0;
-    const stage: Stage = stageId === "subway" ? subwayStage() : stationStage();
+    const stage: Stage =
+      stageId === "subway"
+        ? subwayStage()
+        : stageId === "spaceport"
+          ? spaceportStage()
+          : stationStage();
     // Only the train and its riders are cut at the tunnel mouths, so the rest of the scene stays whole.
     renderer.localClippingEnabled = !!stage.clip;
     const clipObject = (o: THREE.Object3D) => {
@@ -259,8 +265,8 @@ export function World({
     const placeTrain = () => {
       vehicles.forEach((v, i) => {
         const p = trackAt(train.s - offsets[i]);
-        v.group.position.set(p.x, stage.trackY, p.z);
-        v.group.rotation.y = p.yaw;
+        v.group.position.set(p.x, stage.trackY + (p.y ?? 0), p.z);
+        v.group.rotation.set(p.pitch ?? 0, p.yaw, p.roll ?? 0);
       });
     };
     placeTrain();
@@ -395,6 +401,9 @@ export function World({
           fig.root.position.copy(stage.arrival.points[0]);
           ack(f);
           play("pop");
+          sparkle(
+            stage.arrival.points[0].clone().add(new THREE.Vector3(0, 3, 0)),
+          );
         }
         // Keep the platform from overflowing: someone who has already ridden
         // (or else whoever has been around longest) heads into the station.
@@ -628,7 +637,7 @@ export function World({
 
     const updateTrain = (now: number, dt: number) => {
       const brake = 2.4,
-        cruise = demo ? 7 : 8;
+        cruise = stage.speed ?? (demo ? 7 : 8);
       const ahead = (((STOP - train.s) % LOOP) + LOOP) % LOOP;
       const landing = coming();
       if (train.mode === "cruise" || train.mode === "leaving") {
@@ -637,7 +646,7 @@ export function World({
           train.v + (train.mode === "leaving" ? 2.2 : 3) * dt,
         );
         if (train.v >= cruise) train.mode = "cruise";
-        const want = waiting().length > 0 || landing;
+        const want = stage.alwaysStop || waiting().length > 0 || landing;
         if (
           train.mode === "cruise" &&
           want &&
@@ -714,7 +723,7 @@ export function World({
           !busy &&
           !landing &&
           now - train.lastAction > 1.4 &&
-          now - train.t0 > 2.5
+          now - train.t0 > (stage.dwell ?? 2.5)
         ) {
           if (stage.hasDoors) {
             train.mode = "closing";
@@ -868,13 +877,14 @@ export function World({
         const { v, i } = seatRefs[f.seat];
         r.position.lerpVectors(f.from, to, ease(k));
         r.position.y += Math.sin(k * Math.PI) * stage.hopHeight;
-        r.rotation.y = Math.PI * (1 - k) + v.group.rotation.y * k;
+        r.rotation.y =
+          Math.PI * (1 - k) + (v.group.rotation.y + (v.seatYaw?.[i] ?? 0)) * k;
         pose(f.fig, v.stand ? k * 8 : 0, !v.stand && k > 0.6);
         if (k >= 1) {
           clipObject(r);
           v.group.add(r);
           r.position.copy(v.seats[i]);
-          r.rotation.set(0, 0, 0);
+          r.rotation.set(0, v.seatYaw?.[i] ?? 0, 0);
           f.state = "riding";
           f.boardedAt = now;
           f.stop = train.stops;
@@ -1057,7 +1067,13 @@ export function World({
       updateTrain(now, dt);
       const wait = waiting();
       for (const f of [...friends]) updateFriend(f, now, dt, wait.indexOf(f));
-      stage.update(now, dt, { mode: train.mode, doors: train.doors });
+      stage.update(now, dt, {
+        mode: train.mode,
+        doors: train.doors,
+        speed: train.v,
+        puff,
+      });
+      for (const v of vehicles) v.animate?.(now, dt, train.v);
       if (master) {
         const stopped = train.mode === "stopped";
         master.armR.rotation.x = stopped
@@ -1266,7 +1282,9 @@ export function World({
       aria-label={
         stageId === "subway"
           ? "블록 친구들이 지하철을 타는 지하철역"
-          : "블록 친구들이 기차를 타는 기차역"
+          : stageId === "spaceport"
+            ? "블록 친구들이 우주선을 타는 우주기지"
+            : "블록 친구들이 기차를 타는 기차역"
       }
     />
   );

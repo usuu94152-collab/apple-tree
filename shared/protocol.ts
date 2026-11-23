@@ -1,6 +1,6 @@
 export const objectTypes = ["figure"] as const;
 /** Places the big screen can show. */
-export const stageIds = ["station", "subway"] as const;
+export const stageIds = ["station", "subway", "spaceport"] as const;
 export type StageId = (typeof stageIds)[number];
 export type ObjectType = (typeof objectTypes)[number];
 export const regionIds = [

@@ -124,6 +124,23 @@ export function play(kind = "pop") {
       case "rumble":
         tone(a, "sine", 60, 55, now, 0.35, 0.05);
         break;
+      case "spaceBeep":
+        [880, 1320, 1760].forEach((f, i) =>
+          tone(a, "square", f, f, now + i * 0.09, 0.08, 0.03),
+        );
+        break;
+      case "liftoff":
+        hiss(a, now, 2.4, 0.09);
+        tone(a, "sawtooth", 60, 180, now, 2.4, 0.05);
+        tone(a, "sine", 220, 880, now + 0.2, 2.0, 0.04);
+        break;
+      case "landing":
+        hiss(a, now, 1.8, 0.07);
+        tone(a, "sine", 700, 160, now, 1.8, 0.05);
+        break;
+      case "hum":
+        tone(a, "sine", 110, 118, now, 0.6, 0.025);
+        break;
       case "metroHorn":
         tone(a, "triangle", 523, 520, now, 0.35, 0.06);
         tone(a, "triangle", 659, 655, now, 0.35, 0.05);

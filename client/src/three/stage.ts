@@ -10,6 +10,7 @@ export const stageIds: StageId[] = [...ids];
 export const stageNames: Record<StageId, string> = {
   station: "🚂 기차역",
   subway: "🚇 지하철역",
+  spaceport: "🚀 우주기지",
 };
 
 export interface Path {
@@ -37,7 +38,23 @@ export interface Stage {
   clip?: THREE.Plane[];
   trackY: number;
   loop: number;
-  trackAt: (s: number) => { x: number; z: number; yaw: number };
+  /** Route position at distance s; y/pitch/roll let vehicles fly. */
+  trackAt: (s: number) => {
+    x: number;
+    z: number;
+    yaw: number;
+    y?: number;
+    pitch?: number;
+    roll?: number;
+  };
+  /** Stop at the platform every time round, even with nobody waiting. */
+  alwaysStop?: boolean;
+  /** Shortest stay at the platform in seconds (default 2.5). */
+  dwell?: number;
+  /** Cruising speed (default 8). */
+  speed?: number;
+  /** Shown to screen readers. */
+  ariaLabel?: string;
   buildTrain: () => { vehicles: Vehicle[]; gap: number };
   /** Train position s at which it stops, given each vehicle's offset behind the lead. */
   stopAt: (offsets: number[]) => number;
@@ -71,6 +88,18 @@ export interface Stage {
   update: (
     t: number,
     dt: number,
-    info: { mode: TrainMode; doors: number },
+    info: {
+      mode: TrainMode;
+      doors: number;
+      speed: number;
+      puff: (
+        pos: THREE.Vector3,
+        vel: THREE.Vector3,
+        size: number,
+        life: number,
+        color?: string,
+        grow?: number,
+      ) => void;
+    },
   ) => void;
 }
