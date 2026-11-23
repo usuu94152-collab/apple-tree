@@ -1,5 +1,5 @@
-// Moon-base spaceport: a saucer ship lands on its pad, friends walk up the ramp
-// into the glass dome, it lifts off, loops around the sky and lands again.
+// Moon-base spaceport: a rocket stands on its pad, friends walk up the gangway
+// into its glass passenger deck, it lifts off, loops round the sky nose-first and lands tail-first.
 import * as THREE from "three";
 import {
   C,
@@ -19,7 +19,7 @@ import { shadowSun, skyBackground } from "./stationStage";
 const PY = 2.4,
   PAD = new THREE.Vector3(0, 0, -6),
   PAD_TOP = 1.2,
-  H = 26,
+  H = 20,
   R = 30,
   CIRCLE = 2 * Math.PI * R,
   LOOP = H + CIRCLE + H,
@@ -42,86 +42,167 @@ function flight(s: number) {
     return {
       x: PAD.x + R * Math.sin(a),
       z: PAD.z - R + R * Math.cos(a),
-      y: H + 14 * Math.sin(a / 2),
+      y: H + 10 * Math.sin(a / 2),
       yaw: a,
-      roll: -0.35 * Math.sin(a / 2),
+      // Nose leans into the turn direction while it flies round.
+      roll: -0.95 * Math.sin(a / 2),
     };
   }
   return { x: PAD.x, z: PAD.z, y: H - (s - H - CIRCLE), yaw: 0 };
 }
 
-export function buildShip(): Vehicle & { lift: () => number } {
+/** A toy rocket: white body, red nose and fins, and a glass passenger deck in the middle. */
+export function buildRocket(): Vehicle & { lift: () => number } {
   const g = new THREE.Group();
   g.rotation.order = "YXZ";
-  const hull = plastic("#e8ecf1", { rough: 0.22, metal: 0.25 });
-  // Saucer hull from a turned profile.
-  const profile = [
-    [0, 2.6],
-    [3, 2.7],
-    [5.8, 3.1],
-    [7.2, 3.8],
-    [7.35, 4.2],
-    [6.7, 4.8],
-    [5.4, 5.2],
-    [0, 5.2],
-  ].map(([x, y]) => new THREE.Vector2(x, y));
-  const body = mesh(new THREE.LatheGeometry(profile, 48), hull);
-  g.add(body);
-  const band = mesh(
-    new THREE.TorusGeometry(7.25, 0.22, 10, 64),
-    plastic(C.blue),
+  const white = plastic("#f1f3f6", { rough: 0.22, metal: 0.15 }),
+    red = plastic(C.red, { rough: 0.25 }),
+    R0 = 3.2,
+    CABIN = [8, 13.6] as const;
+  const tube = (
+    from: number,
+    to: number,
+    mat: THREE.Material,
+    r = R0,
+    open = false,
+  ) => {
+    const m = mesh(
+      new THREE.CylinderGeometry(r, r, to - from, 40, 1, open),
+      mat,
+    );
+    m.position.y = (from + to) / 2;
+    g.add(m);
+    return m;
+  };
+  // Engine bell and lower body.
+  const bell = mesh(
+    new THREE.CylinderGeometry(1.3, 2.0, 1.8, 32, 1, true),
+    plastic(C.darkGray, { metal: 0.6, rough: 0.3 }),
   );
-  band.rotation.x = Math.PI / 2;
-  band.position.y = 4.0;
-  g.add(band);
-  const lights: THREE.MeshStandardMaterial[] = [];
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2,
-      m = glow(["#ffe066", "#6ff0ff", "#ff7ad9"][i % 3], 2);
-    const b = mesh(new THREE.SphereGeometry(0.28, 12, 8), m, false);
-    b.position.set(Math.sin(a) * 7.45, 4.0, Math.cos(a) * 7.45);
-    g.add(b);
-    lights.push(m);
+  (bell.material as THREE.Material).side = THREE.DoubleSide;
+  bell.position.y = 1.7;
+  g.add(bell);
+  const base = mesh(new THREE.CylinderGeometry(R0 * 0.9, 2.0, 1.6, 40), white);
+  base.position.y = 3.4;
+  g.add(base);
+  tube(4.2, CABIN[0], white);
+  for (const y of [5.4, 6.0]) {
+    const band = mesh(
+      new THREE.CylinderGeometry(R0 + 0.04, R0 + 0.04, 0.35, 40),
+      y === 5.4 ? red : plastic(C.yellow),
+    );
+    band.position.y = y;
+    g.add(band);
   }
-  const floor = mesh(
-    new THREE.CircleGeometry(5.3, 40).rotateX(-Math.PI / 2),
+  // Passenger deck: glass all round, floor and ceiling, four thin pillars.
+  const deck = mesh(
+    new THREE.CylinderGeometry(R0, R0, 0.2, 40),
     plastic("#c9d0d6"),
     false,
   );
-  floor.position.y = 5.22;
-  g.add(floor);
-  // Glass dome, big enough for standing friends.
-  const dome = mesh(
-    new THREE.SphereGeometry(5.35, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2),
-    glass,
-    false,
-    false,
+  deck.position.y = CABIN[0];
+  g.add(deck);
+  tube(CABIN[0], CABIN[1], glass, R0 + 0.05, true).castShadow = false;
+  const ceil = mesh(new THREE.CylinderGeometry(R0, R0, 0.3, 40), white);
+  ceil.position.y = CABIN[1];
+  g.add(ceil);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const p = mesh(
+      new THREE.CylinderGeometry(0.15, 0.15, CABIN[1] - CABIN[0], 8),
+      plastic(C.lightGray, { metal: 0.5 }),
+    );
+    p.position.set(
+      Math.sin(a) * (R0 + 0.05),
+      (CABIN[0] + CABIN[1]) / 2,
+      Math.cos(a) * (R0 + 0.05),
+    );
+    g.add(p);
+  }
+  const lights: THREE.MeshStandardMaterial[] = [];
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2,
+      m = glow(["#ffe066", "#6ff0ff", "#ff7ad9"][i % 3], 2);
+    const b = mesh(new THREE.SphereGeometry(0.22, 10, 8), m, false);
+    b.position.set(
+      Math.sin(a) * (R0 + 0.12),
+      CABIN[0] + 0.15,
+      Math.cos(a) * (R0 + 0.12),
+    );
+    g.add(b);
+    lights.push(m);
+  }
+  // Upper body with round windows, then the red nose cone.
+  tube(CABIN[1], 19, white);
+  const stripe = mesh(
+    new THREE.CylinderGeometry(R0 + 0.04, R0 + 0.04, 0.45, 40),
+    red,
   );
-  dome.position.y = 5.2;
-  g.add(dome);
-  const rim = mesh(
-    new THREE.TorusGeometry(5.35, 0.18, 8, 48),
-    plastic(C.lightGray, { metal: 0.5 }),
-  );
-  rim.rotation.x = Math.PI / 2;
-  rim.position.y = 5.25;
-  g.add(rim);
+  stripe.position.y = 18.2;
+  g.add(stripe);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    const frame = mesh(
+      new THREE.TorusGeometry(0.75, 0.16, 8, 24),
+      plastic(C.lightGray, { metal: 0.5 }),
+    );
+    frame.position.set(
+      Math.sin(a) * (R0 + 0.02),
+      16,
+      Math.cos(a) * (R0 + 0.02),
+    );
+    frame.rotation.y = a;
+    g.add(frame);
+    const pane = mesh(
+      new THREE.CircleGeometry(0.72, 20),
+      glow("#8fd8ff", 0.9),
+      false,
+    );
+    pane.position.set(Math.sin(a) * (R0 + 0.05), 16, Math.cos(a) * (R0 + 0.05));
+    pane.rotation.y = a;
+    g.add(pane);
+  }
+  const nose = mesh(new THREE.ConeGeometry(R0, 6.2, 40), red);
+  nose.position.y = 19 + 3.1;
+  g.add(nose);
   const tip = mesh(
-    new THREE.SphereGeometry(0.35, 12, 8),
+    new THREE.SphereGeometry(0.4, 12, 8),
     glow("#ff5a5a", 2.5),
     false,
   );
-  tip.position.y = 10.75;
+  tip.position.y = 25.4;
   g.add(tip);
-  // Engine glow and flame underneath.
+  // Three swept fins that also stand the rocket on the pad.
+  const finShape = new THREE.Shape();
+  finShape.moveTo(0, 0);
+  finShape.lineTo(3.4, -0.2);
+  finShape.lineTo(3.6, 1.0);
+  finShape.lineTo(0.2, 7.5);
+  finShape.lineTo(0, 7.5);
+  finShape.closePath();
+  const finGeo = new THREE.ExtrudeGeometry(finShape, {
+    depth: 0.45,
+    bevelEnabled: true,
+    bevelThickness: 0.08,
+    bevelSize: 0.08,
+    bevelSegments: 2,
+  });
+  finGeo.translate(0, 0, -0.22);
+  for (const a of [Math.PI / 3, Math.PI, (5 * Math.PI) / 3]) {
+    const fin = mesh(finGeo, red);
+    fin.rotation.y = a - Math.PI / 2;
+    fin.position.set(Math.sin(a) * (R0 - 0.6), 0.2, Math.cos(a) * (R0 - 0.6));
+    g.add(fin);
+  }
+  // Flame under the bell.
   const engine = glow("#ffb347", 1);
-  const nozzle = mesh(
-    new THREE.CylinderGeometry(1.8, 2.2, 0.4, 32),
+  const glowDisc = mesh(
+    new THREE.CircleGeometry(1.25, 24).rotateX(Math.PI / 2),
     engine,
     false,
   );
-  nozzle.position.y = 2.45;
-  g.add(nozzle);
+  glowDisc.position.y = 2.55;
+  g.add(glowDisc);
   const flameMat = new THREE.MeshBasicMaterial({
     color: "#ffb347",
     transparent: true,
@@ -130,17 +211,17 @@ export function buildShip(): Vehicle & { lift: () => number } {
     depthWrite: false,
   });
   const flame = new THREE.Mesh(
-    new THREE.ConeGeometry(1.6, 6, 24, 1, true)
+    new THREE.ConeGeometry(1.8, 7, 24, 1, true)
       .rotateX(Math.PI)
-      .translate(0, -3, 0),
+      .translate(0, -3.5, 0),
     flameMat,
   );
-  flame.position.y = 2.3;
+  flame.position.y = 0.9;
   g.add(flame);
   const core = new THREE.Mesh(
-    new THREE.ConeGeometry(0.8, 4, 16, 1, true)
+    new THREE.ConeGeometry(0.9, 4.5, 16, 1, true)
       .rotateX(Math.PI)
-      .translate(0, -2, 0),
+      .translate(0, -2.25, 0),
     new THREE.MeshBasicMaterial({
       color: "#fff6d0",
       transparent: true,
@@ -149,47 +230,27 @@ export function buildShip(): Vehicle & { lift: () => number } {
       depthWrite: false,
     }),
   );
-  core.position.y = 2.3;
+  core.position.y = 0.9;
   g.add(core);
-  // Three landing legs that fold up in flight.
-  const legs = new THREE.Group();
-  g.add(legs);
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2 + Math.PI / 3;
-    const leg = new THREE.Group();
-    leg.rotation.y = a;
-    const strut = mesh(
-      new THREE.CylinderGeometry(0.22, 0.22, 3.6, 10),
-      plastic(C.darkGray, { metal: 0.4 }),
-    );
-    strut.position.set(0, 1.6, 4.9);
-    strut.rotation.x = 0.42;
-    const foot = mesh(
-      new THREE.CylinderGeometry(0.9, 1.0, 0.3, 16),
-      plastic(C.darkGray, { metal: 0.4 }),
-    );
-    foot.position.set(0, 0.15, 5.6);
-    leg.add(strut, foot);
-    legs.add(leg);
-  }
-  // Boarding ramp at the front, hinged at the rim.
+  // Gangway from the passenger deck down to the platform; slides out when docked.
   const ramp = new THREE.Group();
-  ramp.position.set(0, 4.3, 6.9);
+  ramp.position.set(0, CABIN[0] - 0.1, R0);
   g.add(ramp);
+  const LEN = 12.8;
   const plank = mesh(
-    roundBox(3.2, 0.3, 7.8, 0.08),
+    roundBox(3.2, 0.3, LEN, 0.08),
     plastic(C.lightGray, { metal: 0.3 }),
   );
-  plank.position.z = 3.9;
+  plank.position.z = LEN / 2;
   ramp.add(plank);
   for (const x of [-1.5, 1.5]) {
-    const rail = mesh(roundBox(0.15, 0.15, 7.6, 0.05), plastic(C.yellow));
-    rail.position.set(x, 0.9, 3.9);
+    const rail = mesh(roundBox(0.15, 0.15, LEN - 0.2, 0.05), plastic(C.yellow));
+    rail.position.set(x, 1.0, LEN / 2);
     ramp.add(rail);
   }
-  const SEAT_R = 2.4;
-  const seatYaw = [0, 1, 2, 3, 4, 5].map(
-    (i) => (i / 6) * Math.PI * 2 + Math.PI / 6,
+  const SEAT_R = 1.95;
+  const seatYaw = [0, 1, 2, 3, 4].map(
+    (i) => (i / 5) * Math.PI * 2 + Math.PI / 5,
   );
   let lift = 0;
   return {
@@ -198,23 +259,25 @@ export function buildShip(): Vehicle & { lift: () => number } {
     wheels: [],
     seats: seatYaw.map(
       (a) =>
-        new THREE.Vector3(Math.sin(a) * SEAT_R, 5.25, Math.cos(a) * SEAT_R),
+        new THREE.Vector3(
+          Math.sin(a) * SEAT_R,
+          CABIN[0] + 0.1,
+          Math.cos(a) * SEAT_R,
+        ),
     ),
     seatYaw,
-    driverSeat: new THREE.Vector3(0, 5.25, 0),
+    driverSeat: new THREE.Vector3(0, CABIN[0] + 0.1, 0),
     stand: true,
     lift: () => lift,
     setDoors(open) {
-      // The ramp slides out of the hull rather than folding up in front of the dome.
-      ramp.rotation.x = 0.41;
+      ramp.rotation.x = 0.56;
       ramp.scale.z = Math.max(0.001, open);
       ramp.visible = open > 0.02;
     },
-    animate(t, dt, speed) {
+    animate(t, _dt, speed) {
       const alt = g.position.y - PAD_TOP;
       lift = alt;
-      // Thrust: strong near the ground while moving, gentle cruising flame up high.
-      const thrust = speed < 0.2 ? 0 : alt < 18 ? 1 : 0.45;
+      const thrust = speed < 0.2 ? 0 : alt < 18 ? 1 : 0.55;
       const flick = 0.85 + Math.sin(t * 40) * 0.1 + Math.random() * 0.1;
       flame.scale.set(
         0.6 + thrust * 0.5,
@@ -223,16 +286,12 @@ export function buildShip(): Vehicle & { lift: () => number } {
       );
       core.scale.copy(flame.scale);
       flame.visible = core.visible = thrust > 0;
-      engine.emissiveIntensity = 0.8 + thrust * 3;
-      const fold = THREE.MathUtils.clamp((alt - 3) / 6, 0, 1);
-      legs.position.y = fold * 2.2;
-      legs.scale.y = 1 - fold * 0.75;
+      engine.emissiveIntensity = 0.6 + thrust * 3.5;
       lights.forEach(
         (m, i) =>
           (m.emissiveIntensity =
             1.2 + Math.max(0, Math.sin(t * 5 - i * 0.8)) * 2.4),
       );
-      void dt;
     },
   };
 }
@@ -706,7 +765,7 @@ export function spaceportStage(): Stage {
   blue.position.set(160, 48, -300);
   root.add(blue);
 
-  let ship: ReturnType<typeof buildShip> | null = null;
+  let ship: ReturnType<typeof buildRocket> | null = null;
   return {
     id: "spaceport",
     label: "블록 친구들이 우주선을 타는 우주기지",
@@ -735,7 +794,7 @@ export function spaceportStage(): Stage {
     dwell: 6,
     speed: 12,
     buildTrain() {
-      ship = buildShip();
+      ship = buildRocket();
       return { vehicles: [ship], gap: 0 };
     },
     stopAt: () => 0,
